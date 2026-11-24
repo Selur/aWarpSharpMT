@@ -20,12 +20,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows builds with clang-cl (LLVM on the runner) against the MSVC runtime: its code is faster than MSVC's here.
+          # Windows builds with clang-cl against the MSVC runtime: its code is faster than MSVC's here.
           - { name: Windows x64, os: windows-latest, archs: AMD64, platform: windows-x64, vsenv: '--vsenv', cxx: clang-cl }
           - { name: Linux x86_64, os: ubuntu-latest, archs: x86_64, platform: linux-x86_64, vsenv: '', cxx: '' }
           - { name: macOS arm64, os: macos-latest, archs: arm64, platform: macos-arm64, vsenv: '', cxx: '' }
     steps:
       - uses: actions/checkout@v7
+
+      # The clang-cl of Visual Studio matches its STL (the runner's separate LLVM can be too old for it).
+      - name: Use the clang-cl of Visual Studio
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
+          llvm="$vs/VC/Tools/Llvm/x64/bin"
+          "$llvm/clang-cl.exe" --version
+          cygpath -w "$llvm" >> "$GITHUB_PATH"
 
       # Every SIMD tier of the runner (SSE4.1/AVX2 or NEON) against the C kernels on random data.
       - name: Kernel test
