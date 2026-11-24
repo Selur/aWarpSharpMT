@@ -22,6 +22,7 @@ thread pool. The port gives the same output (8-16 bit, see [Differences](#differ
 - [aWarpSharp and original=true](#awarpsharp-and-originaltrue)
 - [Formats](#formats)
 - [Differences to aWarpSharpMT 2.2.0](#differences-to-awarpsharpmt-220)
+- [Differences to vapoursynth-awarpsharp2](#differences-to-vapoursynth-awarpsharp2)
 - [Performance](#performance)
 - [Build from source](#build-from-source)
 - [Credits and license](#credits-and-license)
@@ -165,6 +166,26 @@ For 8-16 bit the output is identical to aWarpSharpMT 2.2.0 called with `threads=
   defined.
 - The thread pool arguments are ignored; use `Prefetch()` (AviSynth+) or VapourSynth's threads.
 
+## Differences to vapoursynth-awarpsharp2
+
+VapourSynth also has the `warp` plugin ([vapoursynth-awarpsharp2](https://github.com/Selur/vapoursynth-awarpsharp2),
+dubhater's port of aWarpSharp2) with `AWarpSharp2`, `ASobel`, `ABlur` and `AWarp`. Compared with this plugin on the
+same input (4:2:0 8, 10 and 16 bit, the same edge mask for the warps):
+
+| This plugin | `warp` | Output |
+|---|---|---|
+| `aSobel` | `ASobel` | Differs only in rows 0 and 1 (chroma also in the last two rows): this plugin keeps the original's edge handling there; every other sample is identical at every bit depth. |
+| `aBlur` | `ABlur` | Identical (type 0 and 1, 8-16 bit). `ABlur` always blurs chroma (blur+1)/2 times, which is this plugin's default `blurC`. |
+| `aWarp` | `AWarp` | 8 bit identical (own chroma masks and luma-guided chroma). 10-16 bit slightly different: the two plugins round the high bit depth warp differently; this plugin follows aWarpSharpMT 2.2.0 (10 bit, `depth=16`: 16% of the luma samples differ, by at most 15 of 1023). |
+| `aWarp4` | `AWarp` with a 4x clip | Same as `aWarp`: identical at 8 bit, slightly different at 10-16 bit. |
+| `aWarpSharp2` | `AWarpSharp2` | 8 bit: a few pixels next to the top edge, carried there from the first two mask rows (0.008% of the luma samples, by at most 5). 10-16 bit: additionally the warp rounding above. |
+| `aWarpSharp` | – | No counterpart. Without `original` it maps to an `aWarpSharp2` call, so it inherits the `aWarpSharp2` differences; `original=true` (MarcFD's algorithm) exists only here. |
+
+Parameters differ as well: `warp` takes `depth` as a list per plane, `chroma` 0/1 and `planes`; this plugin takes the
+AviSynth parameter set (`chroma` 0-6, separate `depthC`, `depthV`, `blurV`, `blurC`, `threshC`, `cplace`). Only this
+plugin accepts 32 bit float and subsamplings beyond 2 (for example 4:1:1). Speed: with one thread both are equally
+fast (1080p 8 bit `aWarpSharp2`: 257 against 256 fps).
+
 ## Performance
 
 AviSynth+ 3.7.6, 1920x1080 4:2:0, frames per second, AMD Ryzen 9 7950X (32 threads), AVX2, Windows release build
@@ -186,10 +207,8 @@ Single-threaded the port reaches 84-104% of the original's hand-written SSE2/AVX
 1.6x its speed in `original=true` mode. With all threads it is 1.7-2.9x as fast: the blur passes run row by row
 behind each other on planes of 1 MiB and more, so the mask stays in the cache instead of going through memory once
 per pass. This matters most for large frames and `blur` values: VapourSynth, 32 threads, 3840x2160 8 bit
-`aWarpSharp2(blur=32)` 227 fps (two sweeps per pass: 37 fps), 1920x1080 16 bit 494 fps (84 fps). In VapourSynth, `aWarpSharp2` runs as fast as the `warp` plugin (vapoursynth-awarpsharp2, AVX2); at 8 bit
-the output differs from it only in a few pixels next to the top edge (the edge mask computes its first row from the
-picture, as the original aWarpSharpMT does, instead of copying the second row). `bm=0` is serial inside a frame (each
-row reads the rows above already blurred), so only frame threading helps there.
+`aWarpSharp2(blur=32)` 227 fps (two sweeps per pass: 37 fps), 1920x1080 16 bit 494 fps (84 fps). `bm=0` is serial
+inside a frame (each row reads the rows above already blurred), so only frame threading helps there.
 
 ## Build from source
 
