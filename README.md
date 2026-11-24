@@ -184,9 +184,10 @@ AviSynth+ 3.7.6, 1920x1080 4:2:0, frames per second, AMD Ryzen 9 7950X (32 threa
 
 Single-threaded the port reaches 90-106% of the original's hand-written SSE2/AVX assembler in the default mode and
 1.6-1.7x its speed in `original=true` mode; with all threads (where memory bandwidth limits both) it is as fast or
-faster. In VapourSynth, `aWarpSharp2` runs as fast as the `warp` plugin (vapoursynth-awarpsharp2, AVX2) and gives
-the same 8-bit output. `bm=0` is serial inside a frame (each row reads the rows above already blurred), so only frame
-threading helps there.
+faster. In VapourSynth, `aWarpSharp2` runs as fast as the `warp` plugin (vapoursynth-awarpsharp2, AVX2); at 8 bit
+the output differs from it only in a few pixels next to the top edge (the edge mask computes its first row from the
+picture, as the original aWarpSharpMT does, instead of copying the second row). `bm=0` is serial inside a frame (each
+row reads the rows above already blurred), so only frame threading helps there.
 
 ## Build from source
 
