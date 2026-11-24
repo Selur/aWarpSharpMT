@@ -66,7 +66,7 @@ def cases(m, clip):
         ("aWarp c3", lambda o: m.aWarp(clip, edges, depth=-12, chroma=3, opt=o)),
         ("aWarp4", lambda o: m.aWarp4(big, edges, depth=9, chroma=3, opt=o)),
         ("aWarp4 c4", lambda o: m.aWarp4(big, edges, chroma=4, opt=o)),
-        ("aWarpSharp", lambda o: m.aWarpSharp(clip, opt=o)),
+        ("aWarpSharp", lambda o: m.aWarpSharp(clip, original=False, opt=o)),
         ("original", lambda o: m.aWarpSharp(clip, original=True, opt=o)),
         ("original bm0 cm2", lambda o: m.aWarpSharp(clip, original=True, bm=0, cm=2, depth=40, blurlevel=3, opt=o)),
         ("original bm1 cm0", lambda o: m.aWarpSharp(clip, original=True, bm=1, cm=0, thresh=0.9, opt=o)),

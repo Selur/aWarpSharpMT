@@ -29,7 +29,7 @@ CASES = [
     ("aBlur(type=0, blur=3, blurV=1, chroma=3)", "m.aBlur(c, type=0, blur=3, blurV=1, chroma=3)"),
     ("aWarp(e, depth=20)", "m.aWarp(c, e, depth=20)"),
     ("aWarp4(big, e, depth=9, chroma=3)", "m.aWarp4(big, e, depth=9, chroma=3)"),
-    ("aWarpSharp(depth=8, blurlevel=3, thresh=0.3)", "m.aWarpSharp(c, depth=8, blurlevel=3, thresh=0.3)"),
+    ("aWarpSharp(original=false, depth=8, blurlevel=3, thresh=0.3)", "m.aWarpSharp(c, original=False, depth=8, blurlevel=3, thresh=0.3)"),
     ("aWarpSharp(original=true)", "m.aWarpSharp(c, original=True)"),
     ("aWarpSharp(original=true, bm=0, cm=2)", "m.aWarpSharp(c, original=True, bm=0, cm=2)"),
     ("aWarpSharp(original=true, bm=1, show=true)", "m.aWarpSharp(c, original=True, bm=1, show=True)"),

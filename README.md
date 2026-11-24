@@ -41,12 +41,13 @@ The best instruction set is chosen at runtime; any x86-64 CPU works (C code with
 
 ## Usage
 
-AviSynth+, with the argument lists of aWarpSharpMT 2.2.0, so existing scripts work unchanged:
+AviSynth+, with the argument lists of aWarpSharpMT 2.2.0, so existing scripts work unchanged (except `aWarpSharp`,
+whose `original` now defaults to true):
 
 ```
 aWarpSharp2()                                   # thresh 128, blur 2, type 0, depth 16, chroma 4
 aWarpSharp2(depth=8, chroma=3)
-aWarpSharp(depth=16.0, blurlevel=2, thresh=0.5, cm=1, original=true)   # MarcFD's aWarpSharp
+aWarpSharp(depth=16.0, blurlevel=2, thresh=0.5, cm=1)   # MarcFD's aWarpSharp (original=true)
 aWarp(aSobel().aBlur(), depth=3)
 aWarp4(Spline36Resize(width*4, height*4, 0.375, 0.375), aSobel().aBlur(), depth=3)
 ```
@@ -58,7 +59,7 @@ import vapoursynth as vs
 core = vs.core
 m = core.awarpsharpmt
 clip = m.aWarpSharp2(clip, depth=8, chroma=3)
-clip = m.aWarpSharp(clip, original=True)
+clip = m.aWarpSharp(clip)                        # MarcFD's aWarpSharp
 edges = m.aBlur(m.aSobel(clip))
 clip = m.aWarp(clip, edges, depth=3)
 clip = m.aWarp4(clip.resize.Spline36(clip.width * 4, clip.height * 4, src_left=0.375, src_top=0.375), edges, depth=3)
@@ -117,15 +118,15 @@ what the integer code does on the sample scale).
 
 `aWarpSharp(depth, blurlevel, thresh, cm, bm, show, original)` takes the parameters of MarcFD's aWarpSharp (2003).
 
-- `original=false` (default) maps them to aWarpSharp2 as aWarpSharpMT 2.2.0 does: `thresh = thresh*256`,
+- `original=false` maps them to aWarpSharp2 as aWarpSharpMT 2.2.0 does: `thresh = thresh*256`,
   `blur = blurlevel` (`bm=2`) or `blurlevel*3` with `type=1` (`bm` 0 and 1), `depth = depth*blurlevel/2`, chroma
   `cm` 0 -> 1, 1 -> 4, 2 -> 3, 3 -> 2. `show` is ignored.
-- `original=true` runs MarcFD's algorithm as aWarpSharpMT 2.2.0 writes it out (in plain C there): a Sobel mask with
-  the byte wraparound of the original (PADDB), `bm` 0 = an in-place "high quality" blur (row by row, each row reads the
-  rows above already blurred), 1 = a radius 2 blur with 3 passes per level, 2 = a radius 6 blur with 1 pass per level,
-  and a warp with 1/256-pixel steps. `cm` 0 copies the chroma, 1 warps it along the luma mask, 2 with its own masks;
-  `show=true` returns the mask in the luma plane. Ranges: `depth` 0..64, `blurlevel` 1..4, `thresh` 0.0..1.0 (passed
-  as a byte: 1.0 becomes 0, as in the original), `bm` 0..2, `cm` 0..2.
+- `original=true` (default) runs MarcFD's algorithm as aWarpSharpMT 2.2.0 writes it out (in plain C there): a Sobel
+  mask with the byte wraparound of the original (PADDB), `bm` 0 = an in-place "high quality" blur (row by row, each row
+  reads the rows above already blurred), 1 = a radius 2 blur with 3 passes per level, 2 = a radius 6 blur with 1 pass
+  per level, and a warp with 1/256-pixel steps. `cm` 0 copies the chroma, 1 warps it along the luma mask, 2 with its
+  own masks; `show=true` returns the mask in the luma plane. Ranges: `depth` 0..64, `blurlevel` 1..4, `thresh`
+  0.0..1.0 (passed as a byte: 1.0 becomes 0, as in the original), `bm` 0..2, `cm` 0..2.
 
 aWarpSharpMT 2.2.0 limits `original=true` to 8-bit YV12. This port runs it on every format: at 9-16 bit the mask is
 on the sample scale (wraparound at 2^bits, threshold shifted by `bits - 8`, the gradient divided by 2^(bits-8) for
@@ -164,6 +165,7 @@ For 8-16 bit the output is identical to aWarpSharpMT 2.2.0 called with `threads=
   memory). The port repeats the last row.
 - **YV411:** the original's results change from run to run (and its guided modes reject 4:1:1); the port's are
   defined.
+- **`aWarpSharp` default:** `original` defaults to true (2.2.0: false); `original=false` gives the 2.2.0 default.
 - The thread pool arguments are ignored; use `Prefetch()` (AviSynth+) or VapourSynth's threads.
 
 ## Differences to vapoursynth-awarpsharp2
@@ -179,7 +181,7 @@ same input (4:2:0 8, 10 and 16 bit, the same edge mask for the warps):
 | `aWarp` | `AWarp` | 8 bit identical (own chroma masks and luma-guided chroma). 10-16 bit slightly different: the two plugins round the high bit depth warp differently; this plugin follows aWarpSharpMT 2.2.0 (10 bit, `depth=16`: 16% of the luma samples differ, by at most 15 of 1023). |
 | `aWarp4` | `AWarp` with a 4x clip | Same as `aWarp`: identical at 8 bit, slightly different at 10-16 bit. |
 | `aWarpSharp2` | `AWarpSharp2` | 8 bit: a few pixels next to the top edge, carried there from the first two mask rows (0.008% of the luma samples, by at most 5). 10-16 bit: additionally the warp rounding above. |
-| `aWarpSharp` | – | No counterpart. Without `original` it maps to an `aWarpSharp2` call, so it inherits the `aWarpSharp2` differences; `original=true` (MarcFD's algorithm) exists only here. |
+| `aWarpSharp` | – | No counterpart. With `original=false` it maps to an `aWarpSharp2` call, so it inherits the `aWarpSharp2` differences; `original=true` (MarcFD's algorithm) exists only here. |
 
 Parameters differ as well: `warp` takes `depth` as a list per plane, `chroma` 0/1 and `planes`; this plugin takes the
 AviSynth parameter set (`chroma` 0-6, separate `depthC`, `depthV`, `blurV`, `blurC`, `threshC`, `cplace`). Only this

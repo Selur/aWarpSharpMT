@@ -62,7 +62,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
       break;
     case kWarpSharp: {
       p.kind = Kind::WarpSharp;
-      const bool original = a.b("original", false);
+      const bool original = a.b("original", true);
       const double d = a.f("depth", 16.0), t = a.f("thresh", 0.5);
       const int blurlevel = a.i("blurlevel", 2), cm = a.i("cm", 1), bm = a.i("bm", 2);
       if (original) {
