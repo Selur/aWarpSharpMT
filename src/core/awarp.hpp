@@ -33,6 +33,7 @@ struct Params {
   int depthC = 8, depthVC = 8;
   int chroma = 4;
   bool mpeg2 = false;                // cplace "MPEG2"
+  int mask = 0;                      // edge mask: 0 aWarpSharp2, 1 MarcFD's original
   // aWarpSharp(original=true): MarcFD's aWarpSharp.
   bool original = false;
   int origDepth = 0;                 // depth * blurlevel * 128

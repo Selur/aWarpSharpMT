@@ -67,6 +67,9 @@ def cases(m, clip):
         ("aWarp4", lambda o: m.aWarp4(big, edges, depth=9, chroma=3, opt=o)),
         ("aWarp4 c4", lambda o: m.aWarp4(big, edges, chroma=4, opt=o)),
         ("aBlur t2", lambda o: m.aBlur(clip, type=2, chroma=3, opt=o)),
+        ("aSobel m1", lambda o: m.aSobel(clip, mask=1, chroma=3, thresh=200, threshC=90, opt=o)),
+        ("aWarpSharp2 m1", lambda o: m.aWarpSharp2(clip, mask=1, chroma=3, opt=o)),
+        ("aWarpSharp2 m1 t2", lambda o: m.aWarpSharp2(clip, mask=1, type=2, depth=24, opt=o)),
         ("aWarpSharp2 t2", lambda o: m.aWarpSharp2(clip, type=2, chroma=3, depth=20, opt=o)),
         ("aWarpSharp2 t2 c4", lambda o: m.aWarpSharp2(clip, type=2, blur=4, opt=o)),
         ("aWarpSharp", lambda o: m.aWarpSharp(clip, original=False, opt=o)),
@@ -269,6 +272,30 @@ DIGESTS = {
     ("GRAY8 x12", "aBlur t2"): "8af3d8a8742f4e88200ead656438a6ba",
     ("YUV420P16 x12", "aBlur t2"): "c26383aa695f69b59e07713527596c0a",
     ("GRAYS x12", "aBlur t2"): "bc9b376b81fca9f1810b17f07db7fbfc",
+    ("GRAY8", "aSobel m1"): "57327a0e2f9a6bd83741e08f5c33417e",
+    ("GRAY8", "aWarpSharp2 m1"): "dc361910bf18e514efe740758a5d3e85",
+    ("GRAY8", "aWarpSharp2 m1 t2"): "6eeac1275972cdc42150ba1c0c717586",
+    ("YUV420P8", "aSobel m1"): "8a1096c17f65a3aeee5b718bcdcb4923",
+    ("YUV420P8", "aWarpSharp2 m1"): "8a142c834e06a1f84aa2895ca07a8055",
+    ("YUV420P8", "aWarpSharp2 m1 t2"): "9e274a062876af418856fadc60882423",
+    ("YUV422P10", "aSobel m1"): "b5022c49d12d3ac8ebaa1db0994a0303",
+    ("YUV422P10", "aWarpSharp2 m1"): "fbf2bd03bc68801113a289720ebe6c4d",
+    ("YUV422P10", "aWarpSharp2 m1 t2"): "cc6cb652ec6366e973b5555ee4836aed",
+    ("YUV444P16", "aSobel m1"): "633820815aa3dec622b13d127a7471b9",
+    ("YUV444P16", "aWarpSharp2 m1"): "07362a4462d79a672b71025b7e4b886c",
+    ("YUV444P16", "aWarpSharp2 m1 t2"): "fc912f90e2eb86edda2902208c91e826",
+    ("YUV411P8", "aSobel m1"): "38093c0f4114d60b6e5d9bec29470639",
+    ("YUV411P8", "aWarpSharp2 m1"): "c1c9d2381d6ed050f6b460d420bcc082",
+    ("YUV411P8", "aWarpSharp2 m1 t2"): "b1ab9efa60f36d924c56d7d1f2273fd3",
+    ("YUV440P8", "aSobel m1"): "bac787c50e499918da7475f52b88c180",
+    ("YUV440P8", "aWarpSharp2 m1"): "fbd6729c1944ff107fa3151176c25a01",
+    ("YUV440P8", "aWarpSharp2 m1 t2"): "84e91e607b05000379ab8b09bfd70048",
+    ("YUV420PS", "aSobel m1"): "2e0001eb99f36fc4d3a2e83321a6bc0c",
+    ("YUV420PS", "aWarpSharp2 m1"): "45a7115549d90258adef4f7ffbd04389",
+    ("YUV420PS", "aWarpSharp2 m1 t2"): "d6c70b99a5843ebae74023c904139f7b",
+    ("GRAYS", "aSobel m1"): "1e9622415b378a053f098f877e976095",
+    ("GRAYS", "aWarpSharp2 m1"): "09802d81133ca63791450b59170f413e",
+    ("GRAYS", "aWarpSharp2 m1 t2"): "d2e02ae4305728da71b0dc55abec3b92",
 }
 
 
@@ -309,6 +336,16 @@ def main():
     if update:
         return 0
 
+    # mask=1 + type=2 is the edge mask of aWarpSharp(original=true, bm=0): luma of show=true must match
+    for fmt in FORMATS:
+        clip = source(fmt)
+        for t, level in ((0.5, 2), (0.3, 3), (0.75, 4)):
+            ours = m.aBlur(m.aSobel(clip, thresh=int(t * 256) & 255, mask=1), type=2, blur=3 * level)
+            orig = m.aWarpSharp(clip, original=True, bm=0, show=True, thresh=t, blurlevel=level)
+            same = digest(ours.std.ShufflePlanes(0, vs.GRAY)) == digest(orig.std.ShufflePlanes(0, vs.GRAY))
+            failures += not same
+            print("%-4s %-14s %s" % ("ok" if same else "FAIL", fmt, "original mask, thresh %.2f blurlevel %d" % (t, level)))
+
     # argument checks
     c8 = core.std.BlankClip(format=vs.YUV420P8)
     bad = [
@@ -316,6 +353,8 @@ def main():
         lambda: m.aWarpSharp2(c8, depth=128),
         lambda: m.aWarpSharp2(c8, chroma=7),
         lambda: m.aWarpSharp2(c8, type=3),
+        lambda: m.aSobel(c8, mask=2),
+        lambda: m.aWarpSharp2(c8, mask=-1),
         lambda: m.aBlur(c8, type=2, blurV=2),
         lambda: m.aWarpSharp2(c8, type=2, blurC=2, blurVC=1),
         lambda: m.aBlur(c8, blur=-1),

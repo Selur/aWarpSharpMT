@@ -150,6 +150,51 @@ void blurHQPass(const Plane<T>& m) {
   }
 }
 
+// Row copy with `pad` repeated edge samples on both sides: out[pad + x] = r[clamp(x)].
+template <typename T>
+void padRowClamped(const T* r, int w, int pad, Num<T>* out) {
+  for (int i = 0; i < pad; i++) {
+    out[i] = load(r, 0);
+    out[pad + w + i] = load(r, w - 1);
+  }
+  for (int x = 0; x < w; x++) out[pad + x] = load(r, x);
+}
+
+// MarcFD's edge mask: gradient sum wrapping at 2^bits (PADDB; float 256/255), x3, + |h - v|, x3, capped at thr; the
+// right side of h averages all four corners; borders clamped.
+template <typename T>
+void sobelOrigPlane(const CPlane<T>& s, const Plane<T>& d, Num<T> thr, int bits) {
+  using N = Num<T>;
+  const N pmax = pixelMax<T>(bits);
+  auto wrap = [&](N v) -> N {
+    if constexpr (std::is_same<T, float>::value)
+      return v >= 256.0f / 255.0f ? v - 256.0f / 255.0f : v;
+    else
+      return v & ((1 << bits) - 1);
+  };
+  const int w = s.w, h = s.h;
+  std::vector<N> buf(3 * size_t(w + 2));
+  N* const rows[3] = {buf.data(), buf.data() + (w + 2), buf.data() + 2 * (w + 2)};
+  for (int y = 0; y < h; y++) {
+    padRowClamped(s.row(std::max(0, y - 1)), w, 1, rows[0]);
+    padRowClamped(s.row(y), w, 1, rows[1]);
+    padRowClamped(s.row(std::min(h - 1, y + 1)), w, 1, rows[2]);
+    const N *u = rows[0] + 1, *m = rows[1] + 1, *dn = rows[2] + 1;
+    T* o = d.row(y);
+    for (int x = 0; x < w; x++) {
+      const N tl = u[x - 1], tr = u[x + 1], bl = dn[x - 1], br = dn[x + 1];
+      const N top = avg(tl, tr), bottom = avg(bl, br);
+      const N v = absd(avg(u[x], top), avg(dn[x], bottom));
+      const N hz = absd(avg(m[x - 1], avg(tl, bl)), avg(m[x + 1], avg(top, bottom)));
+      const N sum = wrap(hz + v);
+      N e = std::min(pmax, std::min(pmax, sum + sum) + sum);
+      e = std::min(pmax, e + absd(hz, v));
+      e = std::min(pmax, std::min(pmax, e + e) + e);
+      o[x] = T(std::min(e, thr));
+    }
+  }
+}
+
 template <typename T>
 struct Ops {
   const KernelSet<T>& k;
@@ -187,6 +232,14 @@ struct Ops {
       o[0] = o[1];
       o[w - 1] = o[w - 2];
     }
+  }
+
+  // mask 0: aWarpSharp2's edge mask, 1: the original's.
+  void mask(const CPlane<T>& s, const Plane<T>& d, int thresh8, int mode) const {
+    if (mode == 1)
+      sobelOrigPlane(s, d, scale8<T>(thresh8, bits), bits);
+    else
+      sobel(s, d, thresh8);
   }
 
   // Horizontal blur step of one row.
@@ -433,6 +486,7 @@ Engine::Engine(const Params& p, const Format& f) : p_(p), fmt_(f) {
     if (p.blurC < 0) fail("'blurC' must be >=0");
     if (p.blurVC < 0) fail("'blurVC' must be >=0");
     if (p.type < 0 || p.type > 2) fail("'type' must be 0..2");
+    if (p.mask < 0 || p.mask > 1) fail("'mask' must be 0,1");
     if (p.type == 2 && (p.blurV != p.blur || p.blurVC != p.blurC))
       fail("type=2 blurs both directions in one pass: 'blurV' must equal 'blur' and 'blurVC' 'blurC'");
     if (p.depth < -128 || p.depth > 127) fail("'depth' must be -128..127");
@@ -511,7 +565,7 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
   switch (p.kind) {
     case Kind::Sobel: {
       if (ch < 5)
-        ops.sobel(src[0], dst[0], p.thresh);
+        ops.mask(src[0], dst[0], p.thresh, p.mask);
       else
         copyPlane(src[0], dst[0]);
       if (np == 1) break;
@@ -520,7 +574,7 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
       else if (ch == kChromaIgnore || ch == kChromaCopy)
         chromaCopy();
       else
-        for (int i = 1; i < np; i++) ops.sobel(src[i], dst[i], p.threshC);
+        for (int i = 1; i < np; i++) ops.mask(src[i], dst[i], p.threshC, p.mask);
       break;
     }
     case Kind::Blur: {
@@ -574,7 +628,7 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
       // The output planes serve as blur scratch (the warp writes them afterwards), as in the original.
       Buffer<T> maskY(fmt_.width, fmt_.height);
       if (ch != kChromaOnly) {
-        ops.sobel(src[0], maskY.plane, p.thresh);
+        ops.mask(src[0], maskY.plane, p.thresh, p.mask);
         ops.blur(maskY.plane, dst[0], p.type, p.blur, p.blurV);
         if (ch != kChromaGuideOnly && (p.depth != 0 || p.depthV != 0))
           ops.warp(src[0], maskY.plane, dst[0], p.depth, p.depthV, 0);
@@ -592,7 +646,7 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
       } else if (ch == kChromaProcess || ch == kChromaOnly) {
         Buffer<T> mc(dst[1].w, dst[1].h);
         for (int i = 1; i < np; i++) {
-          ops.sobel(src[i], mc.plane, p.threshC);
+          ops.mask(src[i], mc.plane, p.threshC, p.mask);
           ops.blur(mc.plane, dst[i], p.type, p.blurC, p.blurVC);
           ops.warp(src[i], mc.plane, dst[i], p.depthC, p.depthVC, 0);
         }
@@ -622,46 +676,9 @@ struct Orig {
   int bits;
   N pmax;
 
-  // PADDB of the original: the sum of both gradients wraps at 256 (2^bits; float: 256/255).
-  N wrap(N s) const {
-    if constexpr (std::is_same<T, float>::value)
-      return s >= 256.0f / 255.0f ? s - 256.0f / 255.0f : s;
-    else
-      return s & ((1 << bits) - 1);
-  }
+  static void padRow(const T* r, int w, int pad, N* out) { padRowClamped(r, w, pad, out); }
 
-  // Row copy with `pad` repeated edge samples on both sides: out[pad + x] = r[clamp(x)].
-  static void padRow(const T* r, int w, int pad, N* out) {
-    for (int i = 0; i < pad; i++) {
-      out[i] = load(r, 0);
-      out[pad + w + i] = load(r, w - 1);
-    }
-    for (int x = 0; x < w; x++) out[pad + x] = load(r, x);
-  }
-
-  void sobel(const CPlane<T>& s, const Plane<T>& d, N thr) const {
-    const int w = s.w, h = s.h;
-    std::vector<N> buf(3 * size_t(w + 2));
-    N* const rows[3] = {buf.data(), buf.data() + (w + 2), buf.data() + 2 * (w + 2)};
-    for (int y = 0; y < h; y++) {
-      padRow(s.row(std::max(0, y - 1)), w, 1, rows[0]);
-      padRow(s.row(y), w, 1, rows[1]);
-      padRow(s.row(std::min(h - 1, y + 1)), w, 1, rows[2]);
-      const N *u = rows[0] + 1, *m = rows[1] + 1, *dn = rows[2] + 1;
-      T* o = d.row(y);
-      for (int x = 0; x < w; x++) {
-        const N tl = u[x - 1], tr = u[x + 1], bl = dn[x - 1], br = dn[x + 1];
-        const N top = avg(tl, tr), bottom = avg(bl, br);
-        const N v = absd(avg(u[x], top), avg(dn[x], bottom));
-        const N hz = absd(avg(m[x - 1], avg(tl, bl)), avg(m[x + 1], avg(top, bottom)));
-        const N sum = wrap(hz + v);
-        N e = std::min(pmax, std::min(pmax, sum + sum) + sum);
-        e = std::min(pmax, e + absd(hz, v));
-        e = std::min(pmax, std::min(pmax, e + e) + e);
-        o[x] = T(std::min(e, thr));
-      }
-    }
-  }
+  void sobel(const CPlane<T>& s, const Plane<T>& d, N thr) const { sobelOrigPlane(s, d, thr, bits); }
 
   static N blur7(const N* q) {
     const N outer = avg(avg(q[6], q[5]), avg(q[4], q[3]));

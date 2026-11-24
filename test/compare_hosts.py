@@ -28,6 +28,8 @@ CASES = [
     ("aSobel(chroma=3, thresh=200, threshC=90)", "m.aSobel(c, chroma=3, thresh=200, threshC=90)"),
     ("aBlur(type=0, blur=3, blurV=1, chroma=3)", "m.aBlur(c, type=0, blur=3, blurV=1, chroma=3)"),
     ("aBlur(type=2, chroma=3)", "m.aBlur(c, type=2, chroma=3)"),
+    ("aSobel(mask=1, chroma=3)", "m.aSobel(c, mask=1, chroma=3)"),
+    ("aWarpSharp2(mask=1, type=2, chroma=3)", "m.aWarpSharp2(c, mask=1, type=2, chroma=3)"),
     ("aWarpSharp2(type=2, chroma=3, depth=20)", "m.aWarpSharp2(c, type=2, chroma=3, depth=20)"),
     ("aWarp(e, depth=20)", "m.aWarp(c, e, depth=20)"),
     ("aWarp4(big, e, depth=9, chroma=3)", "m.aWarp4(big, e, depth=9, chroma=3)"),

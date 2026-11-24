@@ -62,6 +62,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
       p.blurC = a.i("blurC", (p.blur + 1) >> 1);
       p.blurVC = a.i("blurVC", p.blurC);
       p.threshC = a.i("threshC", p.thresh);
+      p.mask = a.i("mask", 0);
       break;
     case kWarpSharp: {
       p.kind = Kind::WarpSharp;
@@ -104,6 +105,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
       p.thresh = a.i("thresh", 128);
       p.chroma = a.i("chroma", 1);
       p.threshC = a.i("threshC", p.thresh);
+      p.mask = a.i("mask", 0);
       break;
     case kBlur:
       p.kind = Kind::Blur;

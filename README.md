@@ -13,7 +13,8 @@ thread pool. The port gives the same output (8-16 bit, see [Differences](#differ
 - `aWarpSharp(original=true)` for every supported format (Y, 4:2:0, 4:2:2, 4:4:4, 4:1:1, 4:4:0) and bit depth
   (8-16 bit, float), not only 8-bit YV12,
 - every chroma subsampling for the luma-guided chroma modes (4:1:1 and 4:4:0 too),
-- `type=2` in aBlur and aWarpSharp2: the HQ blur of MarcFD's original as a third blur kernel.
+- `type=2` in aBlur and aWarpSharp2: the HQ blur of MarcFD's original as a third blur kernel,
+- `mask=1` in aSobel and aWarpSharp2: the edge mask formula of MarcFD's original.
 
 ## Contents
 
@@ -22,6 +23,7 @@ thread pool. The port gives the same output (8-16 bit, see [Differences](#differ
 - [Functions and parameters](#functions-and-parameters)
 - [aWarpSharp and original=true](#awarpsharp-and-originaltrue)
 - [HQ blur (type=2)](#hq-blur-type2)
+- [Original mask (mask=1)](#original-mask-mask1)
 - [Formats](#formats)
 - [Differences to aWarpSharpMT 2.2.0](#differences-to-awarpsharpmt-220)
 - [Differences to vapoursynth-awarpsharp2](#differences-to-vapoursynth-awarpsharp2)
@@ -77,9 +79,9 @@ warp gives more stable results.
 
 | Function | Arguments (AviSynth+ order) |
 |---|---|
-| aWarpSharp2 | clip, `thresh`, `blur`, `type`, `depth`, `chroma`, `depthC`, `cplace`, `blurV`, `depthV`, `depthVC`, `blurC`, `blurVC`, `threshC` |
+| aWarpSharp2 | clip, `thresh`, `blur`, `type`, `depth`, `chroma`, `depthC`, `cplace`, `blurV`, `depthV`, `depthVC`, `blurC`, `blurVC`, `threshC`, `mask` |
 | aWarpSharp | clip, `depth` (float), `blurlevel`, `thresh` (float), `cm`, `bm`, `show`, `original` |
-| aSobel | clip, `thresh`, `chroma`, `threshC` |
+| aSobel | clip, `thresh`, `chroma`, `threshC`, `mask` |
 | aBlur | clip, `blur`, `type`, `chroma`, `blurV`, `blurC`, `blurVC` |
 | aWarp, aWarp4 | clip, edge mask clip, `depth`, `chroma`, `depthC`, `cplace`, `depthV`, `depthVC` |
 
@@ -91,6 +93,7 @@ ignored (the hosts run the filters in parallel, see [Performance](#performance))
 |---|---|---|---|
 | `thresh` | 128 | 0..255 | edge mask saturation limit; lower = less aggressive sharpening |
 | `threshC` | `thresh` | 0..255 | the same for the chroma planes |
+| `mask` | 0 | 0, 1 | edge mask formula: 0 aWarpSharp2, 1 MarcFD's original, see [Original mask (mask=1)](#original-mask-mask1) |
 | `blur` | 2 (type 0), 3 (type 1), 6 (type 2) | >= 0 | blur passes over the mask; fewer passes sharpen more but can produce artefacts at high depth and thresh |
 | `blurV` | `blur` | >= 0 | vertical passes; if it differs from `blur`, `blur` counts the horizontal passes only (not with type 2) |
 | `blurC`, `blurVC` | `(blur+1)/2`, `blurC` | >= 0 | the same for the chroma planes (type 2: `blurVC` must equal `blurC`) |
@@ -154,6 +157,26 @@ row order on one thread; frames still run in parallel. VapourSynth, 1080p 8 bit 
 
 `aWarpSharp(original=false, bm=0)` keeps the 2.2.0 mapping to `type=1`.
 
+## Original mask (mask=1)
+
+`mask=1` in aSobel and aWarpSharp2 builds the edge mask with the formula of MarcFD's aWarpSharp
+(`aWarpSharp(original=true)` runs the same code). Against the default `mask=0`:
+
+| | `mask=0` (aWarpSharp2) | `mask=1` (original) |
+|---|---|---|
+| sum of the two gradients | saturates at the maximum value | wraps around like the MMX `PADDB` (at 8 bit 250 + 10 = 4; 9-16 bit at 2^bits, float at 256/255): very strong edges can get a small mask value |
+| amplification | + max(h, v), x3, x2 | x3, + \|h - v\|, x3 |
+| horizontal gradient | right side averages the two right corners | right side averages all four corners |
+| borders | columns 0 and w-1 copy columns 1 and w-2, block quirks of 2.2.0's SSE2 code in the first and last two rows | every row and column computed with clamped neighbours |
+
+`thresh` and `threshC` keep their meaning (0..255 on the 8-bit scale). Together with the HQ blur the mask of the
+original is reproduced exactly: the luma of `aBlur(aSobel(thresh=T, mask=1), type=2, blur=3*L)` equals the luma of
+`aWarpSharp(original=true, bm=0, show=true, thresh=T/256, blurlevel=L)` (tested for every format). The warp of
+aWarpSharp2 stays as it is, so `aWarpSharp2(mask=1, type=2)` is a new combination, not the original algorithm.
+
+`mask=1` runs in plain C: VapourSynth, 1080p 8 bit, one thread: `aSobel` 319 fps against 2417 fps with `mask=0`,
+`aWarpSharp2` 148 against 250 fps (32 threads: 2190 against 2902 fps).
+
 ## Formats
 
 | | AviSynth+ | VapourSynth |
@@ -196,7 +219,7 @@ same input (4:2:0 8, 10 and 16 bit, the same edge mask for the warps):
 
 | This plugin | `warp` | Output |
 |---|---|---|
-| `aSobel` | `ASobel` | Differs only in rows 0 and 1 (chroma also in the last two rows): this plugin keeps the original's edge handling there; every other sample is identical at every bit depth. |
+| `aSobel` | `ASobel` | Differs only in rows 0 and 1 (chroma also in the last two rows): this plugin keeps the original's edge handling there; every other sample is identical at every bit depth. `mask=1` exists only here. |
 | `aBlur` | `ABlur` | Identical (type 0 and 1, 8-16 bit). `ABlur` always blurs chroma (blur+1)/2 times, which is this plugin's default `blurC`. `type=2` exists only here. |
 | `aWarp` | `AWarp` | 8 bit identical (own chroma masks and luma-guided chroma). 10-16 bit slightly different: the two plugins round the high bit depth warp differently; this plugin follows aWarpSharpMT 2.2.0 (10 bit, `depth=16`: 16% of the luma samples differ, by at most 15 of 1023). |
 | `aWarp4` | `AWarp` with a 4x clip | Same as `aWarp`: identical at 8 bit, slightly different at 10-16 bit. |

@@ -115,13 +115,13 @@ Format formatOf(const VideoInfo& vi, const char* name, IScriptEnvironment* env) 
   return f;
 }
 
-// Signatures of aWarpSharpMT 2.2.0 plus opt; the thread pool arguments are parsed and ignored.
+// Signatures of aWarpSharpMT 2.2.0 plus opt and mask; the thread pool arguments are parsed and ignored.
 #define AWARP_MT "[threads]i[logicalCores]b[MaxPhysCore]b[SetAffinity]b[sleep]b[prefetch]i[ThreadLevel]i[opt]i"
 const char* const kSignatures[] = {
     "c[thresh]i[blur]i[type]i[depth]i[chroma]i[depthC]i[cplace]s[blurV]i[depthV]i[depthVC]i[blurC]i[blurVC]i"
-    "[threshC]i" AWARP_MT,
+    "[threshC]i" AWARP_MT "[mask]i",
     "c[depth]f[blurlevel]i[thresh]f[cm]i[bm]i[show]b[original]b" AWARP_MT,
-    "c[thresh]i[chroma]i[threshC]i" AWARP_MT,
+    "c[thresh]i[chroma]i[threshC]i" AWARP_MT "[mask]i",
     "c[blur]i[type]i[chroma]i[blurV]i[blurC]i[blurVC]i" AWARP_MT,
     "cc[depth]i[chroma]i[depthC]i[cplace]s[depthV]i[depthVC]i" AWARP_MT,
     "cc[depth]i[chroma]i[depthC]i[cplace]s[depthV]i[depthVC]i" AWARP_MT,
