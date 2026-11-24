@@ -126,6 +126,30 @@ template <>
 float neutralChroma<float>(int) { return 0.0f; }
 
 
+// One pass of MarcFD's HQ blur, in place and row by row: each row reads the rows above as already blurred, taps 1 4 10 1
+// on rows y-2, y-1, y, y+2 (the centre row stands in for y+1), then 1 4 6 4 1 across; rows 0, 1, h-2, h-1 stay.
+template <typename T>
+void blurHQPass(const Plane<T>& m) {
+  using N = Num<T>;
+  const int w = m.w, h = m.h;
+  std::vector<N> buf(size_t(w) + 4);
+  N* row = buf.data() + 2;
+  for (int y = 2; y < h - 2; y++) {
+    const T *a = m.row(y - 2), *b = m.row(y - 1), *c = m.row(y), *e = m.row(y + 2);
+    for (int x = 0; x < w; x++) row[x] = load(a, x) + 4 * load(b, x) + 10 * load(c, x) + load(e, x);
+    row[-2] = row[-1] = row[0];
+    row[w] = row[w + 1] = row[w - 1];
+    T* o = m.row(y);
+    for (int x = 0; x < w; x++) {
+      const N v = row[x - 2] + 4 * row[x - 1] + 6 * row[x] + 4 * row[x + 1] + row[x + 2];
+      if constexpr (std::is_same<T, float>::value)
+        o[x] = v / 256.0f;
+      else
+        o[x] = T((v + 64) / 256);
+    }
+  }
+}
+
 template <typename T>
 struct Ops {
   const KernelSet<T>& k;
@@ -296,6 +320,11 @@ struct Ops {
   // blur passes in both directions, then the passes of the larger of blurH/blurV in its direction only.
   // t: scratch plane of the size of m.
   void blur(const Plane<T>& m, const Plane<T>& t, int type, int blurH, int blurV) const {
+    if (type == 2) {
+      // blurH == blurV (checked): each HQ pass blurs both directions
+      for (int i = 0; i < blurH; i++) blurHQPass(m);
+      return;
+    }
     const int both = std::min(blurH, blurV), rest = std::max(blurH, blurV) - both;
     const bool hz = blurH > both, vt = blurV > both;
     const int group = passGroup(m.w, m.h, type);
@@ -403,7 +432,9 @@ Engine::Engine(const Params& p, const Format& f) : p_(p), fmt_(f) {
     if (p.blurV < 0) fail("'blurV' must be >=0");
     if (p.blurC < 0) fail("'blurC' must be >=0");
     if (p.blurVC < 0) fail("'blurVC' must be >=0");
-    if (p.type < 0 || p.type > 1) fail("'type' must be 0,1");
+    if (p.type < 0 || p.type > 2) fail("'type' must be 0..2");
+    if (p.type == 2 && (p.blurV != p.blur || p.blurVC != p.blurC))
+      fail("type=2 blurs both directions in one pass: 'blurV' must equal 'blur' and 'blurVC' 'blurC'");
     if (p.depth < -128 || p.depth > 127) fail("'depth' must be -128..127");
     if (p.depthC < -128 || p.depthC > 127) fail("'depthC' must be -128..127");
     if (p.depthV < -128 || p.depthV > 127) fail("'depthV' must be -128..127");
@@ -632,29 +663,6 @@ struct Orig {
     }
   }
 
-  static N div256(N v) {
-    if constexpr (std::is_same<T, float>::value)
-      return v / 256.0f;
-    else
-      return (v + 64) / 256;
-  }
-
-  // HQ blur in place, row by row: each row reads the rows above as already blurred (the original's order).
-  void blurHQ(const Plane<T>& m) const {
-    const int w = m.w, h = m.h;
-    std::vector<N> buf(size_t(w) + 4);
-    N* row = buf.data() + 2;
-    for (int y = 2; y < h - 2; y++) {
-      const T *a = m.row(y - 2), *b = m.row(y - 1), *c = m.row(y), *e = m.row(y + 2);
-      for (int x = 0; x < w; x++) row[x] = load(a, x) + 4 * load(b, x) + 10 * load(c, x) + load(e, x);
-      row[-2] = row[-1] = row[0];
-      row[w] = row[w + 1] = row[w - 1];
-      T* o = m.row(y);
-      for (int x = 0; x < w; x++)
-        o[x] = T(div256(row[x - 2] + 4 * row[x - 1] + 6 * row[x] + 4 * row[x + 1] + row[x + 2]));
-    }
-  }
-
   static N blur7(const N* q) {
     const N outer = avg(avg(q[6], q[5]), avg(q[4], q[3]));
     const N inner = avg(avg(q[2], q[1]), q[0]);
@@ -725,7 +733,7 @@ struct Orig {
   void blur(const Plane<T>& m, const Plane<T>& t, int bm, int passes) const {
     for (int i = 0; i < passes; i++) {
       if (bm == 0) {
-        blurHQ(m);
+        blurHQPass(m);
       } else if (bm == 2) {
         blurH(m, t);
         blurV(t, m);

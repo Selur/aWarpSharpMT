@@ -28,7 +28,7 @@ struct Params {
   int thresh = 128, threshC = 128;   // 0..255 (8-bit scale)
   int blur = 2, blurV = 2;           // passes
   int blurC = 1, blurVC = 1;
-  int type = 0;                      // 0: radius 6 blur, 1: radius 2 blur
+  int type = 0;                      // 0: radius 6 blur, 1: radius 2 blur, 2: HQ blur of the original
   int depth = 16, depthV = 16;       // -128..127
   int depthC = 8, depthVC = 8;
   int chroma = 4;

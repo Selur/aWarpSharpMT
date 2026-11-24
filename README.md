@@ -12,7 +12,8 @@ thread pool. The port gives the same output (8-16 bit, see [Differences](#differ
 - 32 bit float for every function,
 - `aWarpSharp(original=true)` for every supported format (Y, 4:2:0, 4:2:2, 4:4:4, 4:1:1, 4:4:0) and bit depth
   (8-16 bit, float), not only 8-bit YV12,
-- every chroma subsampling for the luma-guided chroma modes (4:1:1 and 4:4:0 too).
+- every chroma subsampling for the luma-guided chroma modes (4:1:1 and 4:4:0 too),
+- `type=2` in aBlur and aWarpSharp2: the HQ blur of MarcFD's original as a third blur kernel.
 
 ## Contents
 
@@ -20,6 +21,7 @@ thread pool. The port gives the same output (8-16 bit, see [Differences](#differ
 - [Usage](#usage)
 - [Functions and parameters](#functions-and-parameters)
 - [aWarpSharp and original=true](#awarpsharp-and-originaltrue)
+- [HQ blur (type=2)](#hq-blur-type2)
 - [Formats](#formats)
 - [Differences to aWarpSharpMT 2.2.0](#differences-to-awarpsharpmt-220)
 - [Differences to vapoursynth-awarpsharp2](#differences-to-vapoursynth-awarpsharp2)
@@ -89,10 +91,10 @@ ignored (the hosts run the filters in parallel, see [Performance](#performance))
 |---|---|---|---|
 | `thresh` | 128 | 0..255 | edge mask saturation limit; lower = less aggressive sharpening |
 | `threshC` | `thresh` | 0..255 | the same for the chroma planes |
-| `blur` | 2 (type 0), 3 (type 1) | >= 0 | blur passes over the mask; fewer passes sharpen more but can produce artefacts at high depth and thresh |
-| `blurV` | `blur` | >= 0 | vertical passes; if it differs from `blur`, `blur` counts the horizontal passes only |
-| `blurC`, `blurVC` | `(blur+1)/2`, `blurC` | >= 0 | the same for the chroma planes |
-| `type` | 0 (aWarpSharp2), 1 (aBlur) | 0, 1 | 0: radius 6 blur; 1: radius 2 blur, about 8x as many passes for the same effect (2.5x as slow), better quality |
+| `blur` | 2 (type 0), 3 (type 1), 6 (type 2) | >= 0 | blur passes over the mask; fewer passes sharpen more but can produce artefacts at high depth and thresh |
+| `blurV` | `blur` | >= 0 | vertical passes; if it differs from `blur`, `blur` counts the horizontal passes only (not with type 2) |
+| `blurC`, `blurVC` | `(blur+1)/2`, `blurC` | >= 0 | the same for the chroma planes (type 2: `blurVC` must equal `blurC`) |
+| `type` | 0 (aWarpSharp2), 1 (aBlur) | 0..2 | 0: radius 6 blur; 1: radius 2 blur, about 8x as many passes for the same effect (2.5x as slow), better quality; 2: HQ blur of MarcFD's original, see [HQ blur (type=2)](#hq-blur-type2) |
 | `depth` | 16 (aWarpSharp2), 3 (aWarp, aWarp4) | -128..127 | warp strength; negative warps the other way |
 | `depthV` | `depth` | -128..127 | vertical strength; `depth` is then the horizontal one |
 | `depthC`, `depthVC` | `depth` (4:4:4, Y), else `depth/2`; `depthC` | -128..127 | the same for the chroma planes |
@@ -133,6 +135,24 @@ on the sample scale (wraparound at 2^bits, threshold shifted by `bits - 8`, the 
 the displacement), in float with exact fractions (wraparound at 256/255). The luma mask is reduced to the chroma size
 by rounded pair averages (2x2 in 4:2:0 as in the original), and the chroma displacement is the luma depth divided by
 the subsampling in each direction (depth/2 in YV12, as in the original).
+
+## HQ blur (type=2)
+
+`type=2` in aBlur and aWarpSharp2 is the "high quality" blur of MarcFD's aWarpSharp (`aWarpSharp(original=true,
+bm=0)` runs the same code). One pass works in place, top to bottom, and blurs both directions at once:
+
+- vertical taps 1, 4, 10, 1 on the rows y-2, y-1, y, y+2: the centre row stands in for the row below, as in the
+  original's assembler; rows y-2 and y-1 are already blurred in this pass, so mask values are carried downwards,
+- then horizontal taps 1, 4, 6, 4, 1 (columns clamped at the edges), divided by 256 with `+64` (rounds down, as in
+  the original; float exact),
+- the top and bottom two rows are not changed.
+
+Since one pass covers both directions, `blurV` must equal `blur` and `blurVC` must equal `blurC` (left out, they
+are). `blur` defaults to 6, the strength of the original's default `blurlevel=2`. Inside a frame the passes run in
+row order on one thread; frames still run in parallel. VapourSynth, 1080p 8 bit `aWarpSharp2`: `type=2` (6 passes)
+103 fps with one thread and 1410 fps with 32, against 240 and 2876 fps for `type=1, blur=6`.
+
+`aWarpSharp(original=false, bm=0)` keeps the 2.2.0 mapping to `type=1`.
 
 ## Formats
 
@@ -177,7 +197,7 @@ same input (4:2:0 8, 10 and 16 bit, the same edge mask for the warps):
 | This plugin | `warp` | Output |
 |---|---|---|
 | `aSobel` | `ASobel` | Differs only in rows 0 and 1 (chroma also in the last two rows): this plugin keeps the original's edge handling there; every other sample is identical at every bit depth. |
-| `aBlur` | `ABlur` | Identical (type 0 and 1, 8-16 bit). `ABlur` always blurs chroma (blur+1)/2 times, which is this plugin's default `blurC`. |
+| `aBlur` | `ABlur` | Identical (type 0 and 1, 8-16 bit). `ABlur` always blurs chroma (blur+1)/2 times, which is this plugin's default `blurC`. `type=2` exists only here. |
 | `aWarp` | `AWarp` | 8 bit identical (own chroma masks and luma-guided chroma). 10-16 bit slightly different: the two plugins round the high bit depth warp differently; this plugin follows aWarpSharpMT 2.2.0 (10 bit, `depth=16`: 16% of the luma samples differ, by at most 15 of 1023). |
 | `aWarp4` | `AWarp` with a 4x clip | Same as `aWarp`: identical at 8 bit, slightly different at 10-16 bit. |
 | `aWarpSharp2` | `AWarpSharp2` | 8 bit: a few pixels next to the top edge, carried there from the first two mask rows (0.008% of the luma samples, by at most 5). 10-16 bit: additionally the warp rounding above. |

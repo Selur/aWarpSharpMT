@@ -27,6 +27,8 @@ CASES = [
     ("aWarpSharp2(chroma=6, cplace=\"MPEG2\", depth=-30, depthV=50)", "m.aWarpSharp2(c, chroma=6, cplace='MPEG2', depth=-30, depthV=50)"),
     ("aSobel(chroma=3, thresh=200, threshC=90)", "m.aSobel(c, chroma=3, thresh=200, threshC=90)"),
     ("aBlur(type=0, blur=3, blurV=1, chroma=3)", "m.aBlur(c, type=0, blur=3, blurV=1, chroma=3)"),
+    ("aBlur(type=2, chroma=3)", "m.aBlur(c, type=2, chroma=3)"),
+    ("aWarpSharp2(type=2, chroma=3, depth=20)", "m.aWarpSharp2(c, type=2, chroma=3, depth=20)"),
     ("aWarp(e, depth=20)", "m.aWarp(c, e, depth=20)"),
     ("aWarp4(big, e, depth=9, chroma=3)", "m.aWarp4(big, e, depth=9, chroma=3)"),
     ("aWarpSharp(original=false, depth=8, blurlevel=3, thresh=0.3)", "m.aWarpSharp(c, original=False, depth=8, blurlevel=3, thresh=0.3)"),

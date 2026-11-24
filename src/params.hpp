@@ -39,6 +39,9 @@ inline bool isMpeg2(const std::string& s) {
   return true;
 }
 
+// Blur passes by type: radius 6, radius 2, HQ blur (6 = the original's blurlevel 2 x 3).
+inline int defaultBlur(int type) { return type == 0 ? 2 : (type == 1 ? 3 : 6); }
+
 // full_chroma: 4:4:4 or Y (depthC defaults to depth there, else to depth / 2).
 inline Params buildParams(int fn, const Args& a, bool full_chroma) {
   Params p;
@@ -48,7 +51,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
       p.kind = Kind::WarpSharp2;
       p.thresh = a.i("thresh", 128);
       p.type = a.i("type", 0);
-      p.blur = a.i("blur", p.type == 0 ? 2 : 3);
+      p.blur = a.i("blur", defaultBlur(p.type));
       p.depth = a.i("depth", 16);
       p.chroma = a.i("chroma", 4);
       p.depthC = a.i("depthC", dc(p.depth));
@@ -105,7 +108,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
     case kBlur:
       p.kind = Kind::Blur;
       p.type = a.i("type", 1);
-      p.blur = a.i("blur", p.type == 0 ? 2 : 3);
+      p.blur = a.i("blur", defaultBlur(p.type));
       p.chroma = a.i("chroma", 1);
       p.blurV = a.i("blurV", p.blur);
       p.blurC = a.i("blurC", (p.blur + 1) >> 1);
