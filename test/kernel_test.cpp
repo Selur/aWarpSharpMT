@@ -73,8 +73,8 @@ bool testSet(const KernelSet<T>& c, const KernelSet<T>& s, const char* isa, int 
       if (w >= 12) {
         Row<T> src(w, bits), oc(w, bits);
         Row<T> os = oc;
-        c.blurH6(src.p(), oc.p(), 6, w - 6);
-        s.blurH6(src.p(), os.p(), 6, w - 6);
+        c.blurH6(src.p(), oc.p(), w);
+        s.blurH6(src.p(), os.p(), w);
         if (!same(oc.p(), os.p(), w, "blurH6", isa, w, bits)) return false;
       }
       if (w >= 5) {

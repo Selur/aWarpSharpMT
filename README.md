@@ -167,34 +167,39 @@ For 8-16 bit the output is identical to aWarpSharpMT 2.2.0 called with `threads=
 
 ## Performance
 
-AviSynth+ 3.7.6, 1920x1080 4:2:0, frames per second, AMD Ryzen 9 7950X (32 threads), AVX2. aWarpSharpMT 2.2.0 with
-`threads=1`, with its internal thread pool (default `threads=0`), and with `threads=1` under `Prefetch(32)`:
+AviSynth+ 3.7.6, 1920x1080 4:2:0, frames per second, AMD Ryzen 9 7950X (32 threads), AVX2, Windows release build
+(clang-cl). aWarpSharpMT 2.2.0 with `threads=1`, with its internal thread pool (default `threads=0`), and with
+`threads=1` under `Prefetch(32)`:
 
 | 1080p | 2.2.0, 1 thread | port, 1 thread | 2.2.0, own threads | 2.2.0, Prefetch(32) | port, Prefetch(32) |
 |---|---:|---:|---:|---:|---:|
-| `aWarpSharp2()` 8 bit | 290 | 214 | 1072 | 1655 | **1765** |
-| `aWarpSharp2(chroma=3)` 8 bit | 264 | 223 | 871 | 1549 | **1768** |
-| `aWarpSharp2(type=1, blur=7)` 8 bit | 269 | 221 | 572 | 917 | **1187** |
-| `aWarpSharp2()` 16 bit | 165 | 141 | 781 | **691** | 689 |
-| `aWarpSharp(original=true)` 8 bit | 13.3 | **16.1** | 163 | 218 | **268** |
-| `aWarpSharp(original=true, bm=0)` 8 bit | 16.6 | **23.3** | 34.7 | 277 | **404** |
-| `aWarpSharp2()` float | - | 93 | - | - | 322 |
-| `aWarpSharp(original=true)` float | - | 22.4 | - | - | 271 |
+| `aWarpSharp2()` 8 bit | **293** | 264 | 1320 | 1679 | **1691** |
+| `aWarpSharp2(chroma=3)` 8 bit | 275 | **292** | 1113 | 1552 | **1615** |
+| `aWarpSharp2(type=1, blur=7)` 8 bit | **268** | 246 | 767 | 942 | **1124** |
+| `aWarpSharp2()` 16 bit | 167 | 163 | 894 | 696 | 700 |
+| `aWarpSharp(original=true)` 8 bit | 13.4 | **21.7** | 176 | 222 | **369** |
+| `aWarpSharp(original=true, bm=0)` 8 bit | 17.2 | **29.0** | 35.5 | 277 | **524** |
+| `aWarpSharp2()` float | - | 105 | - | - | 321 |
+| `aWarpSharp(original=true)` float | - | 47.5 | - | - | 266 |
 
-With all threads the port is as fast as the original or faster; single-threaded it reaches 75-85% of the original's
-hand-written SSE2/AVX assembler in the default mode (both gather the warp's source samples one by one) and is faster
-in `original=true` mode. `bm=0` is serial inside a frame (each row reads the rows above already blurred), so only
-frame threading helps there.
+Single-threaded the port reaches 90-106% of the original's hand-written SSE2/AVX assembler in the default mode and
+1.6-1.7x its speed in `original=true` mode; with all threads (where memory bandwidth limits both) it is as fast or
+faster. In VapourSynth, `aWarpSharp2` runs as fast as the `warp` plugin (vapoursynth-awarpsharp2, AVX2) and gives
+the same 8-bit output. `bm=0` is serial inside a frame (each row reads the rows above already blurred), so only frame
+threading helps there.
 
 ## Build from source
 
-Meson and a C++17 compiler (MSVC, GCC or Clang):
+Meson and a C++17 compiler (GCC, Clang, clang-cl or MSVC):
 
 ```
 meson setup build            # Windows: meson setup build --vsenv -Db_vscrt=mt   (or run build.bat)
 meson compile -C build
 meson test -C build          # every SIMD tier against the C kernels
 ```
+
+The Windows release is built with clang-cl (`set CXX=clang-cl` before `meson setup`; `build.bat` picks it when it is
+on the PATH), which gives about 5-10% faster code than MSVC here; both produce the same output.
 
 Wheel: `pip wheel .` (Windows: add `--config-settings=setup-args=--vsenv --config-settings=setup-args=-Db_vscrt=mt`).
 

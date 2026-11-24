@@ -64,20 +64,6 @@ inline N blur2(N c, N p1, N q1, N p2, N q2) {
   return avg(a, avg(p1, q1));
 }
 
-// Horizontal radius 6 blur of column x; the six columns at each side are mirrored from the other side where they
-// leave the row (the edge formula of aWarpSharp2).
-template <typename T>
-inline Num<T> blurH6At(const T* s, int x, int w) {
-  Num<T> p[6], q[6];
-  for (int k = 1; k <= 6; k++) {
-    const int l = x - k >= 0 ? x - k : x + k;
-    const int r = x + k < w ? x + k : x - k;
-    p[k - 1] = load(s, l);
-    q[k - 1] = load(s, r);
-  }
-  return blur6(load(s, x), p, q);
-}
-
 template <typename T>
 void blurH6RowScalar(const T* s, T* d, int x0, int x1) {
   for (int x = x0; x < x1; x++) {
@@ -88,6 +74,20 @@ void blurH6RowScalar(const T* s, T* d, int x0, int x1) {
     }
     d[x] = T(blur6(load(s, x), p, q));
   }
+}
+
+// A whole row of the radius 6 blur (w >= 12): the first six columns take all six neighbours from the right, the last
+// six from the left (the edge formula of aWarpSharp2).
+template <typename T>
+void blurH6RowFull(const T* s, T* d, int w) {
+  auto side = [&](int x, int dir) {
+    Num<T> p[6];
+    for (int k = 0; k < 6; k++) p[k] = load(s, x + dir * (k + 1));
+    return T(blur6(load(s, x), p, p));
+  };
+  for (int x = 0; x < 6; x++) d[x] = side(x, 1);
+  blurH6RowScalar(s, d, 6, w - 6);
+  for (int x = w - 6; x < w; x++) d[x] = side(x, -1);
 }
 
 template <typename T>

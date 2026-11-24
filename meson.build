@@ -1,7 +1,7 @@
 project('aWarpSharpMT', 'cpp',
   default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++17'],
   meson_version : '>=0.64.0',
-  version : '2.3.0'
+  version : '2.3.1'
 )
 
 sources = [
@@ -17,9 +17,14 @@ incs = include_directories('include/avisynth', 'include/vapoursynth', 'src')
 
 cxx = meson.get_compiler('cpp')
 msvc = cxx.get_argument_syntax() == 'msvc'
+# clang-cl takes MSVC options, but GCC-style instruction set flags, and contracts float math into FMA by default.
+clang_cl = cxx.get_id() == 'clang-cl'
 
 if msvc
   add_project_arguments('/D_CRT_SECURE_NO_WARNINGS', language : 'cpp')
+  if clang_cl
+    add_project_arguments('/clang:-ffp-contract=off', language : 'cpp')
+  endif
 else
   add_project_arguments('-Wall', '-Wextra', '-ffp-contract=off', language : 'cpp')
 endif
@@ -35,7 +40,7 @@ if cpu == 'x86_64'
   foreach name, s : simd
     simd_libs += static_library('kernels_' + name, s['src'],
       include_directories : incs,
-      cpp_args : msvc ? s['msvc'] : s['gcc'],
+      cpp_args : (msvc and not clang_cl) ? s['msvc'] : s['gcc'],
       gnu_symbol_visibility : 'hidden',
       pic : true
     )

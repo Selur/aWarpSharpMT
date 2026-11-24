@@ -174,9 +174,7 @@ struct Ops {
         T* o = t.row(y);
         if (type == 0) {
           if (w >= 12) {
-            for (int x = 0; x < 6; x++) o[x] = T(blurH6Edge(s, x, w));
-            k.blurH6(s, o, 6, w - 6);
-            for (int x = w - 6; x < w; x++) o[x] = T(blurH6Edge(s, x, w));
+            k.blurH6(s, o, w);
           } else {
             for (int x = 0; x < w; x++) o[x] = T(blurH6Edge(s, x, w));
           }
@@ -490,10 +488,11 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
     }
     case Kind::WarpSharp2:
     case Kind::WarpSharp: {
-      Buffer<T> maskY(fmt_.width, fmt_.height), tmp(fmt_.width, fmt_.height);
+      // The output planes serve as blur scratch (the warp writes them afterwards), as in the original.
+      Buffer<T> maskY(fmt_.width, fmt_.height);
       if (ch != kChromaOnly) {
         ops.sobel(src[0], maskY.plane, p.thresh);
-        ops.blur(maskY.plane, tmp.plane, p.type, p.blur, p.blurV);
+        ops.blur(maskY.plane, dst[0], p.type, p.blur, p.blurV);
         if (ch != kChromaGuideOnly && (p.depth != 0 || p.depthV != 0))
           ops.warp(src[0], maskY.plane, dst[0], p.depth, p.depthV, 0);
         else
@@ -509,12 +508,9 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
         chromaCopy();
       } else if (ch == kChromaProcess || ch == kChromaOnly) {
         Buffer<T> mc(dst[1].w, dst[1].h);
-        Plane<T> t = tmp.plane;
-        t.w = dst[1].w;
-        t.h = dst[1].h;
         for (int i = 1; i < np; i++) {
           ops.sobel(src[i], mc.plane, p.threshC);
-          ops.blur(mc.plane, t, p.type, p.blurC, p.blurVC);
+          ops.blur(mc.plane, dst[i], p.type, p.blurC, p.blurVC);
           ops.warp(src[i], mc.plane, dst[i], p.depthC, p.depthVC, 0);
         }
       } else {

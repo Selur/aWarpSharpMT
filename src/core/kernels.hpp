@@ -28,14 +28,14 @@ struct WarpRow {
   Num<T> pixel_max = 0;
 };
 
-// Columns [x0, x1) of one row. The kernels read one sample (sobel, warp), two (blur r2) or six (blur r6) left of x0 and
-// right of x1 - 1, which the caller keeps inside the row.
+// Columns [x0, x1) of one row. The kernels read one sample (sobel) or two (blur r2) left of x0 and right of x1 - 1,
+// which the caller keeps inside the row; the radius 6 blur and the warp handle the whole row.
 template <typename T>
 struct KernelSet {
   // Edge mask from the rows above, at and below.
   void (*sobel)(const T* up, const T* mid, const T* down, T* dst, int x0, int x1, Num<T> thresh, Num<T> pixel_max);
-  // Horizontal blur, radius 6 / radius 2, symmetric part.
-  void (*blurH6)(const T* src, T* dst, int x0, int x1);
+  // Horizontal blur: radius 6 for a whole row of at least 12 samples, radius 2 for the symmetric part [x0, x1).
+  void (*blurH6)(const T* src, T* dst, int w);
   void (*blurH2)(const T* src, T* dst, int x0, int x1);
   // Vertical blur from 13 / 5 row pointers (rows[6] / rows[2] is the output row), columns [0, w).
   void (*blurV6)(const T* const* rows, T* dst, int w);

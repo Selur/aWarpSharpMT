@@ -130,11 +130,19 @@ struct Lanes<float> {
   static typename S::VF avg(typename S::VF a, typename S::VF b) { return avgF(a, b); }
 };
 
+// The edge vectors first, full width; the middle part then overwrites all but their six edge columns.
 template <typename T>
-void blurH6(const T* s, T* d, int x0, int x1) {
+void blurH6(const T* s, T* d, int w) {
   using L = Lanes<T>;
-  if (x1 - x0 < L::N) return blurH6RowScalar(s, d, x0, x1);
-  forRange(x0, x1, L::N, [&](int x) {
+  if (w < L::N + 12) return blurH6RowFull(s, d, w);
+  auto side = [&](int x, int dir) {
+    decltype(L::ld(s)) p[6];
+    for (int k = 0; k < 6; k++) p[k] = L::ld(s + x + dir * (k + 1));
+    return blur6Vec(L::ld(s + x), p, p, L::avg);
+  };
+  for (int x = 0; x < 6; x += L::N) L::st(d + x, side(x, 1));
+  for (int x = w - L::N; x > w - 6 - L::N; x -= L::N) L::st(d + x, side(x, -1));
+  forRange(6, w - 6, L::N, [&](int x) {
     decltype(L::ld(s)) p[6], q[6];
     for (int k = 0; k < 6; k++) {
       p[k] = L::ld(s + x - k - 1);
@@ -193,6 +201,13 @@ inline void stNarrow(uint16_t* p, typename S::VI v) { S::stI16(p, v); }
 // the source plane would read one sample past it; there (where the fraction is 0, so s1 does not count) s1 = s0.
 // With hardware gathers (S::kGather) a 32-bit gather reads 4 / sizeof(T) samples; lanes whose read would leave the
 // plane are masked out and read here.
+// The displacement of the integer warp is at most 128 rows (|mask difference| * |depth| / 2^bits pixels), so only rows
+// that close to the bottom can read the last sample of the source plane; the others skip the bounds checks.
+template <int SMAGL, typename T>
+inline bool nearBottom(const WarpRow<T>& r) {
+  return ((r.y + 130) << SMAGL) >= (r.h << SMAGL) - 1;
+}
+
 template <typename T>
 inline int32_t pairScalar(const T* p, bool both) {
   const int32_t a = p[0], b = both ? p[1] : p[0];
@@ -200,19 +215,19 @@ inline int32_t pairScalar(const T* p, bool both) {
 }
 
 template <typename T>
-inline void gatherPairs(const T* src, typename S::VI idxv, ptrdiff_t st, ptrdiff_t lim, typename S::VI& top,
+inline void gatherPairs(const T* src, typename S::VI idxv, ptrdiff_t st, ptrdiff_t lim, bool check, typename S::VI& top,
                         typename S::VI& bot) {
   using VI = typename S::VI;
   constexpr int N = S::NI;
   alignas(64) int32_t idx[N], t[N], b[N];
   if constexpr (S::kGather) {
     constexpr int span = 4 / int(sizeof(T)) - 1;
-    const VI limv = S::setI(int(lim - span) + 1);
+    const VI limv = S::setI(check ? int(lim - span) + 1 : INT32_MAX);
     const auto okT = S::ltI(idxv, limv);
     const auto okB = S::ltI(S::addI(idxv, S::setI(int(st))), limv);
     top = S::template gather32<int(sizeof(T))>(src, idxv, okT);
     bot = S::template gather32<int(sizeof(T))>(src + st, idxv, okB);
-    if (!S::allMI(S::andMI(okT, okB))) {
+    if (check && !S::allMI(S::andMI(okT, okB))) {
       S::stI(idx, idxv);
       S::stI(t, top);
       S::stI(b, bot);
@@ -232,8 +247,8 @@ inline void gatherPairs(const T* src, typename S::VI idxv, ptrdiff_t st, ptrdiff
     S::stI(idx, idxv);
     for (int i = 0; i < N; i++) {
       const T* p = src + idx[i];
-      t[i] = pairScalar(p, idx[i] + 1 <= lim);
-      b[i] = pairScalar(p + st, idx[i] + st + 1 <= lim);
+      t[i] = pairScalar(p, !check || idx[i] + 1 <= lim);
+      b[i] = pairScalar(p + st, !check || idx[i] + st + 1 <= lim);
     }
     top = S::ldI(t);
     bot = S::ldI(b);
@@ -264,9 +279,13 @@ void warp8Row(const WarpRow<uint8_t>& r, int lo, int hi) {
   const uint8_t* base = Narrow ? r.src + ptrdiff_t(r.y << SMAGL) * st : r.src;
   const ptrdiff_t lim = ptrdiff_t((r.h << SMAGL) - 1) * st + ((r.w << SMAGL) - 1) - (base - r.src);
   const VI limv = S::setI(int(lim - 3) + 1), stv = S::setI(int(st));
-  forRange(lo, hi, N, [&](int x) {
-    VW hd = S::mulhsw(S::sllw<7>(S::subw(S::ldw8(r.ec + x - 1), S::ldw8(r.ec + x + 1))), dH);
-    VW vd = S::mulhsw(S::sllw<7>(S::subw(S::ldw8(r.eu + x), S::ldw8(r.ed + x))), dV);
+  const bool check = nearBottom<SMAGL>(r);
+  const uint8_t *eu = r.eu, *ec = r.ec, *ed = r.ed;  // locals: the byte stores below may alias the struct
+  uint8_t* const dst = r.dst;
+  for (int xi = lo; xi < hi; xi += N) {
+    const int x = std::min(xi, hi - N);
+    VW hd = S::mulhsw(S::sllw<7>(S::subw(S::ldw8(ec + x - 1), S::ldw8(ec + x + 1))), dH);
+    VW vd = S::mulhsw(S::sllw<7>(S::subw(S::ldw8(eu + x), S::ldw8(ed + x))), dV);
     vd = S::maxsw(S::minsw(vd, vmax), vmin);
     VW rh = S::andw(S::sllw<SMAGL>(hd), m127);
     const VW rv = S::andw(S::sllw<SMAGL>(vd), m127);
@@ -289,17 +308,17 @@ void warp8Row(const WarpRow<uint8_t>& r, int lo, int hi) {
       rh = S::andw(rh, S::packsw(in[0], in[1]));
     }
     // Pairs s0 | s1 << 8 of the rows above and below the position.
-    if (!S::allMI(S::andMI(S::ltI(S::addI(id[0], stv), limv), S::ltI(S::addI(id[1], stv), limv)))) {
+    if (check && !S::allMI(S::andMI(S::ltI(S::addI(id[0], stv), limv), S::ltI(S::addI(id[1], stv), limv)))) {
       for (int i = 0; i < N; i++) r.dst[x + i] = warpPx<SMAGL>(r, x + i);
-      return;
+      continue;
     }
     const VW top = Narrow ? S::gatherw8u(base, id[0], id[1]) : S::gatherw8(base, id[0], id[1]);
     const VW bot = Narrow ? S::gatherw8u(base + st, id[0], id[1]) : S::gatherw8(base + st, id[0], id[1]);
     const VW irh = S::subw(c128, rh), irv = S::subw(c128, rv);
     const VW t = S::srlw<7>(S::addw(S::addw(S::mullow(S::andw(top, mFF), irh), S::mullow(S::srlw<8>(top), rh)), c64));
     const VW b = S::srlw<7>(S::addw(S::addw(S::mullow(S::andw(bot, mFF), irh), S::mullow(S::srlw<8>(bot), rh)), c64));
-    S::stw8(r.dst + x, S::srlw<7>(S::addw(S::addw(S::mullow(t, irv), S::mullow(b, rv)), c64)));
-  });
+    S::stw8(dst + x, S::srlw<7>(S::addw(S::addw(S::mullow(t, irv), S::mullow(b, rv)), c64)));
+  }
 }
 
 template <int SMAGL>
@@ -336,9 +355,14 @@ void warpInt(const WarpRow<T>& r, int x0, int x1) {
   const VI iota = S::sllI<SMAGL>(S::iotaI());
   const ptrdiff_t st = r.src_stride;
   const ptrdiff_t lim = ptrdiff_t((r.h << SMAGL) - 1) * st + ((r.w << SMAGL) - 1);  // last sample of the source
-  forRange(lo, hi, N, [&](int x) {
-    VI hd = S::sraI<14>(S::mulI(S::subI(ldWiden(r.ec + x - 1), ldWiden(r.ec + x + 1)), dH));
-    VI vd = S::sraI<14>(S::mulI(S::subI(ldWiden(r.eu + x), ldWiden(r.ed + x)), dV));
+  const bool check = nearBottom<SMAGL>(r);
+  // Locals and a plain loop: stores through the row pointer must not force reloads of the row pointers.
+  const T *eu = r.eu, *ec = r.ec, *ed = r.ed, *src = r.src;
+  T* const dst = r.dst;
+  for (int xi = lo; xi < hi; xi += N) {
+    const int x = std::min(xi, hi - N);
+    VI hd = S::sraI<14>(S::mulI(S::subI(ldWiden(ec + x - 1), ldWiden(ec + x + 1)), dH));
+    VI vd = S::sraI<14>(S::mulI(S::subI(ldWiden(eu + x), ldWiden(ed + x)), dV));
     vd = S::maxI(S::minI(vd, vmax), vmin);
     VI rh = S::andI(S::sllI<SMAGL>(hd), m127);
     const VI rv = S::andI(S::sllI<SMAGL>(vd), m127);
@@ -350,7 +374,7 @@ void warpInt(const WarpRow<T>& r, int x0, int x1) {
     rh = S::selI(inside, rh, zero);
     hd = S::maxI(S::minI(hd, xmax), zero);
     VI top, bot;
-    gatherPairs(r.src, S::addI(S::mulI(S::addI(rowbase, vd), stride), hd), st, lim, top, bot);
+    gatherPairs(src, S::addI(S::mulI(S::addI(rowbase, vd), stride), hd), st, lim, check, top, bot);
     // a * (128 - f) + b * f as one signed 16-bit multiply-add of the pair (a - 2^15, b - 2^15) with (128 - f, f),
     // plus 2^15 * 128: exact for any 16-bit a and b.
     const VI wh = S::orI(S::subI(c128, rh), S::sllI<16>(rh)), wv = S::orI(S::subI(c128, rv), S::sllI<16>(rv));
@@ -361,8 +385,8 @@ void warpInt(const WarpRow<T>& r, int x0, int x1) {
     const VI t = S::sraI<7>(S::addI(S::madd16(S::xorI(top, flip), wh), bias));
     const VI b = S::sraI<7>(S::addI(S::madd16(S::xorI(bot, flip), wh), bias));
     const VI v = S::sraI<7>(S::addI(S::madd16(S::xorI(S::orI(t, S::sllI<16>(b)), flip), wv), bias));
-    stNarrow(r.dst + x, S::maxI(S::minI(v, pmax), zero));
-  });
+    stNarrow(dst + x, S::maxI(S::minI(v, pmax), zero));
+  }
 }
 
 template <int SMAGL>
@@ -385,9 +409,13 @@ void warpF(const WarpRow<float>& r, int x0, int x1) {
   alignas(64) int32_t idx[N], nxt[N];
   alignas(64) float v00[N], v01[N], v10[N], v11[N];
   const ptrdiff_t st = r.src_stride;
-  forRange(lo, hi, N, [&](int x) {
-    const VF hd = S::mulf(S::subf(S::ldf(r.ec + x - 1), S::ldf(r.ec + x + 1)), dH);
-    VF vd = S::mulf(S::subf(S::ldf(r.eu + x), S::ldf(r.ed + x)), dV);
+  // Locals and a plain loop: stores through the row pointer must not force reloads of the row pointers.
+  const float *eu = r.eu, *ec = r.ec, *ed = r.ed, *src = r.src;
+  float* const dst = r.dst;
+  for (int xi = lo; xi < hi; xi += N) {
+    const int x = std::min(xi, hi - N);
+    const VF hd = S::mulf(S::subf(S::ldf(ec + x - 1), S::ldf(ec + x + 1)), dH);
+    VF vd = S::mulf(S::subf(S::ldf(eu + x), S::ldf(ed + x)), dV);
     vd = S::maxf(S::minf(vd, vmax), vmin);
     const VF hp = S::mulf(S::addf(S::addf(S::setf(float(x)), iota), hd), vs);
     const VF vp = S::mulf(vd, vs);
@@ -402,18 +430,18 @@ void warpF(const WarpRow<float>& r, int x0, int x1) {
     VF a, s01, c, s11;
     if constexpr (S::kGather) {
       // Every index lies inside the plane (the right neighbour only where the fraction is not 0).
-      a = S::gatherF(r.src, i00);
-      s01 = S::gatherF(r.src, i01);
-      c = S::gatherF(r.src, S::addI(i00, stv));
-      s11 = S::gatherF(r.src, S::addI(i01, stv));
+      a = S::gatherF(src, i00);
+      s01 = S::gatherF(src, i01);
+      c = S::gatherF(src, S::addI(i00, stv));
+      s11 = S::gatherF(src, S::addI(i01, stv));
     } else {
       S::stI(idx, i00);
       S::stI(nxt, i01);
       for (int i = 0; i < N; i++) {
-        v00[i] = r.src[idx[i]];
-        v01[i] = r.src[nxt[i]];
-        v10[i] = r.src[idx[i] + st];
-        v11[i] = r.src[nxt[i] + st];
+        v00[i] = src[idx[i]];
+        v01[i] = src[nxt[i]];
+        v10[i] = src[idx[i] + st];
+        v11[i] = src[nxt[i] + st];
       }
       a = S::ldf(v00);
       s01 = S::ldf(v01);
@@ -422,8 +450,8 @@ void warpF(const WarpRow<float>& r, int x0, int x1) {
     }
     const VF t = S::addf(a, S::mulf(S::subf(s01, a), fx));
     const VF b = S::addf(c, S::mulf(S::subf(s11, c), fx));
-    S::stf(r.dst + x, S::addf(t, S::mulf(S::subf(b, t), fy)));
-  });
+    S::stf(dst + x, S::addf(t, S::mulf(S::subf(b, t), fy)));
+  }
 }
 
 KernelSet<uint8_t> set8() {

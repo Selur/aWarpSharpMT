@@ -20,9 +20,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: Windows x64, os: windows-latest, archs: AMD64, platform: windows-x64, vsenv: '--vsenv' }
-          - { name: Linux x86_64, os: ubuntu-latest, archs: x86_64, platform: linux-x86_64, vsenv: '' }
-          - { name: macOS arm64, os: macos-latest, archs: arm64, platform: macos-arm64, vsenv: '' }
+          # Windows builds with clang-cl (LLVM on the runner) against the MSVC runtime: its code is faster than MSVC's here.
+          - { name: Windows x64, os: windows-latest, archs: AMD64, platform: windows-x64, vsenv: '--vsenv', cxx: clang-cl }
+          - { name: Linux x86_64, os: ubuntu-latest, archs: x86_64, platform: linux-x86_64, vsenv: '', cxx: '' }
+          - { name: macOS arm64, os: macos-latest, archs: arm64, platform: macos-arm64, vsenv: '', cxx: '' }
     steps:
       - uses: actions/checkout@v7
 
@@ -31,6 +32,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install meson ninja
+          if [ -n "${{ matrix.cxx }}" ]; then export CXX=${{ matrix.cxx }}; fi
           meson setup kt ${{ matrix.vsenv }}
           meson test -C kt --print-errorlogs
 
@@ -48,7 +50,8 @@ jobs:
           # The runtime is linked statically (b_vscrt=mt), so delvewheel would have nothing to bundle.
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: ''
           # Meson would otherwise pick MinGW g++ on the runner, whose DLL needs libstdc++/libgcc
-          # at load time. Build with MSVC and link the runtime statically instead.
+          # at load time. Build with clang-cl in the MSVC environment and link the runtime statically instead.
+          CIBW_ENVIRONMENT_WINDOWS: CXX=clang-cl
           CIBW_CONFIG_SETTINGS_WINDOWS: setup-args=--vsenv setup-args=-Db_vscrt=mt
           # The test installs the wheel together with the VapourSynth PyPI package and checks every instruction set
           # of the runner against the C code and the C output against the digests made on Windows.
