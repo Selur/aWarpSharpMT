@@ -173,18 +173,20 @@ AviSynth+ 3.7.6, 1920x1080 4:2:0, frames per second, AMD Ryzen 9 7950X (32 threa
 
 | 1080p | 2.2.0, 1 thread | port, 1 thread | 2.2.0, own threads | 2.2.0, Prefetch(32) | port, Prefetch(32) |
 |---|---:|---:|---:|---:|---:|
-| `aWarpSharp2()` 8 bit | **293** | 264 | 1320 | 1679 | **1691** |
-| `aWarpSharp2(chroma=3)` 8 bit | 275 | **292** | 1113 | 1552 | **1615** |
-| `aWarpSharp2(type=1, blur=7)` 8 bit | **268** | 246 | 767 | 942 | **1124** |
-| `aWarpSharp2()` 16 bit | 167 | 163 | 894 | 696 | 700 |
-| `aWarpSharp(original=true)` 8 bit | 13.4 | **21.7** | 176 | 222 | **369** |
-| `aWarpSharp(original=true, bm=0)` 8 bit | 17.2 | **29.0** | 35.5 | 277 | **524** |
+| `aWarpSharp2()` 8 bit | **293** | 258 | 1320 | 1700 | **2954** |
+| `aWarpSharp2(chroma=3)` 8 bit | 275 | **287** | 1113 | 1553 | **2789** |
+| `aWarpSharp2(type=1, blur=7)` 8 bit | **268** | 225 | 767 | 958 | **2776** |
+| `aWarpSharp2()` 16 bit | **167** | 157 | 894 | 693 | **1281** |
+| `aWarpSharp(original=true)` 8 bit | 13.4 | **21.0** | 176 | 222 | **370** |
+| `aWarpSharp(original=true, bm=0)` 8 bit | 17.2 | **27.8** | 35.5 | 276 | **508** |
 | `aWarpSharp2()` float | - | 105 | - | - | 321 |
 | `aWarpSharp(original=true)` float | - | 47.5 | - | - | 266 |
 
-Single-threaded the port reaches 90-106% of the original's hand-written SSE2/AVX assembler in the default mode and
-1.6-1.7x its speed in `original=true` mode; with all threads (where memory bandwidth limits both) it is as fast or
-faster. In VapourSynth, `aWarpSharp2` runs as fast as the `warp` plugin (vapoursynth-awarpsharp2, AVX2); at 8 bit
+Single-threaded the port reaches 84-104% of the original's hand-written SSE2/AVX assembler in the default mode and
+1.6x its speed in `original=true` mode. With all threads it is 1.7-2.9x as fast: the blur passes run row by row
+behind each other on planes of 1 MiB and more, so the mask stays in the cache instead of going through memory once
+per pass. This matters most for large frames and `blur` values: VapourSynth, 32 threads, 3840x2160 8 bit
+`aWarpSharp2(blur=32)` 227 fps (two sweeps per pass: 37 fps), 1920x1080 16 bit 494 fps (84 fps). In VapourSynth, `aWarpSharp2` runs as fast as the `warp` plugin (vapoursynth-awarpsharp2, AVX2); at 8 bit
 the output differs from it only in a few pixels next to the top edge (the edge mask computes its first row from the
 picture, as the original aWarpSharpMT does, instead of copying the second row). `bm=0` is serial inside a frame (each
 row reads the rows above already blurred), so only frame threading helps there.

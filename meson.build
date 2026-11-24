@@ -1,7 +1,7 @@
 project('aWarpSharpMT', 'cpp',
   default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++17'],
   meson_version : '>=0.64.0',
-  version : '2.3.1'
+  version : '2.3.2'
 )
 
 sources = [
