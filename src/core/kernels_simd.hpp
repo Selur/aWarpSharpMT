@@ -305,7 +305,7 @@ void warp8Row(const WarpRow<uint8_t>& r, int lo, int hi) {
 template <int SMAGL>
 void warp8(const WarpRow<uint8_t>& r, int x0, int x1) {
   const int lo = std::max(x0, 1), hi = std::min(x1, r.w - 1);
-  if (hi - lo < S::NW) return warpRowScalar<SMAGL>(r, x0, x1);
+  if (hi - lo < S::NW || (r.h << SMAGL) == 1) return warpRowScalar<SMAGL>(r, x0, x1);
   for (int x = x0; x < lo; x++) r.dst[x] = warpPx<SMAGL>(r, x);
   for (int x = hi; x < x1; x++) r.dst[x] = warpPx<SMAGL>(r, x);
   // Narrow: positions up to (w << SMAGL) plus the largest displacement (127 << SMAGL) and strides fit 16 bits.
@@ -322,7 +322,7 @@ void warpInt(const WarpRow<T>& r, int x0, int x1) {
   constexpr int N = S::NI;
   constexpr int SH = 8 * int(sizeof(T));
   const int lo = std::max(x0, 1), hi = std::min(x1, r.w - 1);
-  if (hi - lo < N) return warpRowScalar<SMAGL>(r, x0, x1);
+  if (hi - lo < N || (r.h << SMAGL) == 1) return warpRowScalar<SMAGL>(r, x0, x1);
   for (int x = x0; x < lo; x++) r.dst[x] = warpPx<SMAGL>(r, x);
   for (int x = hi; x < x1; x++) r.dst[x] = warpPx<SMAGL>(r, x);
 
@@ -371,7 +371,7 @@ void warpF(const WarpRow<float>& r, int x0, int x1) {
   using VF = typename S::VF;
   constexpr int N = S::NI;
   const int lo = std::max(x0, 1), hi = std::min(x1, r.w - 1);
-  if (hi - lo < N) return warpRowScalarF<SMAGL>(r, x0, x1);
+  if (hi - lo < N || (r.h << SMAGL) == 1) return warpRowScalarF<SMAGL>(r, x0, x1);
   for (int x = x0; x < lo; x++) r.dst[x] = warpPxF<SMAGL>(r, x);
   for (int x = hi; x < x1; x++) r.dst[x] = warpPxF<SMAGL>(r, x);
 

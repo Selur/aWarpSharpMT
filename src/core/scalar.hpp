@@ -133,7 +133,8 @@ inline T warpPx(const WarpRow<T>& r, int x) {
   if (!(hd >= 0 && hd < xmax)) rh = 0;
   hd = std::max(std::min(hd, xmax), 0);
   const T* s0 = r.src + (ptrdiff_t(r.y << SMAGL) + vd) * r.src_stride + hd;
-  const T* s1 = s0 + r.src_stride;
+  // A plane of one row (source at the mask size): no row below, its weight is 0 there.
+  const T* s1 = (r.h << SMAGL) > 1 ? s0 + r.src_stride : s0;
   // Without a fraction the right neighbour (past the row end at the right edge) is not read.
   const int t = rh ? (s0[0] * (128 - rh) + s0[1] * rh + 64) >> 7 : s0[0];
   const int b = rh ? (s1[0] * (128 - rh) + s1[1] * rh + 64) >> 7 : s1[0];
@@ -166,7 +167,7 @@ inline float warpPxF(const WarpRow<float>& r, int x) {
   const int iv = int(std::floor(vp));
   const float fy = vp - float(iv);
   const float* s0 = r.src + (ptrdiff_t(r.y << SMAGL) + iv) * r.src_stride + ix;
-  const float* s1 = s0 + r.src_stride;
+  const float* s1 = (r.h << SMAGL) > 1 ? s0 + r.src_stride : s0;
   const float t = fx != 0.0f ? s0[0] + (s0[1] - s0[0]) * fx : s0[0];
   const float b = fx != 0.0f ? s1[0] + (s1[1] - s1[0]) * fx : s1[0];
   return t + (b - t) * fy;
