@@ -74,6 +74,20 @@ def cases(m, clip):
     ]
 
 
+# Planes of 1 to 3 MiB and above take the other blur schedules of the engine (one pass per sweep, groups of passes).
+LARGE_FORMATS = ["GRAY8", "YUV420P16", "GRAYS"]
+
+
+def large_cases(m, clip):
+    big = clip.resize.Point(clip.width * 12, clip.height * 12)
+    return [
+        ("aWarpSharp2", lambda o: m.aWarpSharp2(big, chroma=3, opt=o)),
+        ("aWarpSharp2 t1", lambda o: m.aWarpSharp2(big, type=1, blur=12, depth=30, opt=o)),
+        ("aBlur t0 h", lambda o: m.aBlur(big, type=0, blur=9, blurV=3, chroma=3, opt=o)),
+        ("aBlur t1 v", lambda o: m.aBlur(big, type=1, blur=2, blurV=11, chroma=3, opt=o)),
+    ]
+
+
 def digest(clip):
     h = hashlib.md5()
     for f in clip.frames():
@@ -212,6 +226,18 @@ DIGESTS = {
     ("GRAYS", "original bm0 cm2"): "34688871fff758b5acf33db5c2daeeaa",
     ("GRAYS", "original bm1 cm0"): "0434424dcd7b8e2bc15c3ef0d11297b5",
     ("GRAYS", "original show"): "22859116e63ff5df9ac997d7a76fff80",
+    ("GRAY8 x12", "aWarpSharp2"): "daa279f152995933661a89129239427e",
+    ("GRAY8 x12", "aWarpSharp2 t1"): "8e7f47aadce83fa2c9853e7e5e9da7dd",
+    ("GRAY8 x12", "aBlur t0 h"): "ba6fe0977abfc2d71e384939435e2047",
+    ("GRAY8 x12", "aBlur t1 v"): "279c44b2d120c71129a57937ffa58f26",
+    ("YUV420P16 x12", "aWarpSharp2"): "12b6ef2bdd402efd63b104cc94ed1d05",
+    ("YUV420P16 x12", "aWarpSharp2 t1"): "7fdd2ba44e85e052b06d3ba7e9b2a6bc",
+    ("YUV420P16 x12", "aBlur t0 h"): "ac10ba44a6c557d248b31283fc3216e9",
+    ("YUV420P16 x12", "aBlur t1 v"): "822349c19c3b5f3df336286fb04ca0f4",
+    ("GRAYS x12", "aWarpSharp2"): "bcf5cfaaaf1310326407af99387ce5b1",
+    ("GRAYS x12", "aWarpSharp2 t1"): "7ee9315e230fce1978c1ae3faea4f427",
+    ("GRAYS x12", "aBlur t0 h"): "1d9e6ccdff04ce5aa9de703673d3f116",
+    ("GRAYS x12", "aBlur t1 v"): "05984039ea84f99d30ba98588f271f47",
 }
 
 
@@ -230,15 +256,16 @@ def main():
         except vs.Error:
             pass
     print("instruction sets:", available)
-    for fmt in FORMATS:
+    runs = [(fmt, fmt, cases) for fmt in FORMATS] + [(fmt, fmt + " x12", large_cases) for fmt in LARGE_FORMATS]
+    for fmt, key, make in runs:
         clip = source(fmt)
-        for name, fn in cases(m, clip):
+        for name, fn in make(m, clip):
             ref = digest(fn(0))
             if update:
-                print('    ("%s", "%s"): "%s",' % (fmt, name, ref))
+                print('    ("%s", "%s"): "%s",' % (key, name, ref))
                 continue
             msg = []
-            want = DIGESTS.get((fmt, name))
+            want = DIGESTS.get((key, name))
             if want is None:
                 msg.append("no digest")
             elif want != ref:
@@ -247,7 +274,7 @@ def main():
                 if digest(fn(o)) != ref:
                     msg.append("opt=%d differs from C" % o)
             failures += bool(msg and msg != ["no digest"])
-            print("%-4s %-10s %-22s %s" % ("FAIL" if msg and msg != ["no digest"] else "ok", fmt, name, "; ".join(msg)))
+            print("%-4s %-14s %-22s %s" % ("FAIL" if msg and msg != ["no digest"] else "ok", key, name, "; ".join(msg)))
     if update:
         return 0
 

@@ -165,65 +165,109 @@ struct Ops {
     }
   }
 
-  // One blur pass: optional horizontal step mask -> tmp, optional vertical step back into mask.
-  void blurPass(const Plane<T>& m, const Plane<T>& t, int type, bool hz, bool vt) const {
-    const int w = m.w, h = m.h;
-    if (hz) {
-      for (int y = 0; y < h; y++) {
-        const T* s = m.row(y);
-        T* o = t.row(y);
-        if (type == 0) {
-          if (w >= 12) {
-            k.blurH6(s, o, w);
-          } else {
-            for (int x = 0; x < w; x++) o[x] = T(blurH6Edge(s, x, w));
-          }
-        } else {
-          if (w >= 5) {
-            for (int x : {0, 1}) o[x] = T(blurH2Clamped(s, x, w));
-            k.blurH2(s, o, 2, w - 2);
-            for (int x : {w - 2, w - 1}) o[x] = T(blurH2Clamped(s, x, w));
-          } else {
-            for (int x = 0; x < w; x++) o[x] = T(blurH2Clamped(s, x, w));
-          }
-        }
-      }
-    }
-    if (!vt) {
-      if (hz) copyPlane(CPlane<T>(t), m);
-      return;
-    }
-    const Plane<T>& dst = m;
-    if (!hz) copyPlane(CPlane<T>(m), t);  // the vertical step reads tmp while it writes mask
-    const T* rows[13];
-    for (int y = 0; y < h; y++) {
-      auto r = [&](int yy) { return t.row(std::max(0, std::min(yy, h - 1))); };
-      if (type == 0) {
-        // Rows 0..5 take their six neighbours from below, the last six rows (from row 6 on) from above.
-        for (int k6 = 1; k6 <= 6; k6++) {
-          int above, below;
-          if (y < 6) {
-            above = below = y + k6;
-          } else if (y >= h - 6) {
-            above = below = y - k6;
-          } else {
-            above = y - k6;
-            below = y + k6;
-          }
-          rows[6 - k6] = r(above);
-          rows[6 + k6] = r(below);
-        }
-        rows[6] = t.row(y);
-        k.blurV6(rows, dst.row(y), w);
+  // Horizontal blur step of one row.
+  void blurRowH(const T* s, T* o, int w, int type) const {
+    if (type == 0) {
+      if (w >= 12) {
+        k.blurH6(s, o, w);
       } else {
-        rows[0] = r(y > 1 ? y - 2 : (y > 0 ? y - 1 : y));
-        rows[1] = r(y > 0 ? y - 1 : y);
-        rows[2] = t.row(y);
-        rows[3] = r(y < h - 1 ? y + 1 : y);
-        rows[4] = r(y < h - 2 ? y + 2 : (y < h - 1 ? y + 1 : y));
-        k.blurV2(rows, dst.row(y), w);
+        for (int x = 0; x < w; x++) o[x] = T(blurH6Edge(s, x, w));
+      }
+    } else if (w >= 5) {
+      for (int x : {0, 1}) o[x] = T(blurH2Clamped(s, x, w));
+      k.blurH2(s, o, 2, w - 2);
+      for (int x : {w - 2, w - 1}) o[x] = T(blurH2Clamped(s, x, w));
+    } else {
+      for (int x = 0; x < w; x++) o[x] = T(blurH2Clamped(s, x, w));
+    }
+  }
+
+  // Vertical blur step of row y; at(yy) gives row yy (0 <= yy < h) of the horizontal step.
+  template <typename At>
+  void blurRowV(const At& at, T* o, int y, int h, int w, int type) const {
+    const T* rows[13];
+    auto r = [&](int yy) { return at(std::max(0, std::min(yy, h - 1))); };
+    if (type == 0) {
+      // Rows 0..5 take their six neighbours from below, the last six rows (from row 6 on) from above.
+      for (int k6 = 1; k6 <= 6; k6++) {
+        int above, below;
+        if (y < 6) {
+          above = below = y + k6;
+        } else if (y >= h - 6) {
+          above = below = y - k6;
+        } else {
+          above = y - k6;
+          below = y + k6;
+        }
+        rows[6 - k6] = r(above);
+        rows[6 + k6] = r(below);
+      }
+      rows[6] = at(y);
+      k.blurV6(rows, o, w);
+    } else {
+      rows[0] = r(y > 1 ? y - 2 : (y > 0 ? y - 1 : y));
+      rows[1] = r(y > 0 ? y - 1 : y);
+      rows[2] = at(y);
+      rows[3] = r(y < h - 1 ? y + 1 : y);
+      rows[4] = r(y < h - 2 ? y + 2 : (y < h - 1 ? y + 1 : y));
+      k.blurV2(rows, o, w);
+    }
+  }
+
+  // n blur passes in place, row by row: pass i+1 trails pass i by the vertical radius and keeps its horizontal step
+  // in a ring of rows, so the rows stay in the cache between the passes.
+  void blurPasses(const Plane<T>& m, int type, bool hz, bool vt, int n) const {
+    const int w = m.w, h = m.h;
+    const int lag = vt ? (type == 0 ? 6 : 2) : 0;
+    const int ringRows = vt ? (type == 0 ? 16 : 8) : 1;
+    Buffer<T> ring(w, n * ringRows);
+    auto ringRow = [&](int p, int y) { return ring.plane.row(p * ringRows + (y & (ringRows - 1))); };
+    const size_t bytes = size_t(w) * sizeof(T);
+    for (int s = 0; s < h + lag * n; s++) {
+      for (int p = 0; p < n; p++) {
+        const int hy = s - p * lag, vy = hy - lag;
+        if (hy >= 0 && hy < h) {
+          if (hz)
+            blurRowH(m.row(hy), ringRow(p, hy), w, type);
+          else
+            std::memcpy(ringRow(p, hy), m.row(hy), bytes);
+        }
+        if (vy >= 0 && vy < h) {
+          if (vt)
+            blurRowV([&](int yy) { return static_cast<const T*>(ringRow(p, yy)); }, m.row(vy), vy, h, w, type);
+          else
+            std::memcpy(m.row(vy), ringRow(p, vy), bytes);
+        }
       }
     }
+  }
+
+  // One pass in two sweeps over the plane: horizontal step mask -> t, vertical step back into mask.
+  void blurSweeps(const Plane<T>& m, const Plane<T>& t, int type, bool hz, bool vt) const {
+    const int w = m.w, h = m.h;
+    const size_t bytes = size_t(w) * sizeof(T);
+    for (int y = 0; y < h; y++) {
+      if (hz)
+        blurRowH(m.row(y), t.row(y), w, type);
+      else
+        std::memcpy(t.row(y), m.row(y), bytes);
+    }
+    for (int y = 0; y < h; y++) {
+      if (vt)
+        blurRowV([&](int yy) { return static_cast<const T*>(t.row(yy)); }, m.row(y), y, h, w, type);
+      else
+        std::memcpy(m.row(y), t.row(y), bytes);
+    }
+  }
+
+  // Passes per call of blurPasses, from the plane size (measured on a 16-core Zen 4): below 1 MiB the plane stays in
+  // the cache (0: two sweeps per pass), below 3 MiB one pass per call, above that ring and trailing rows in 512 KiB.
+  static int passGroup(int w, int h, int type) {
+    const size_t plane = size_t(w) * size_t(h) * sizeof(T);
+    if (plane < (size_t(1) << 20)) return 0;
+    if (plane < (size_t(3) << 20)) return 1;
+    const size_t perPass = size_t(type == 0 ? 16 + 6 : 8 + 2) * size_t(w) * sizeof(T);
+    return int(std::max<size_t>(1, (size_t(512) << 10) / perPass));
   }
 
   // Radius 6 edge columns: the first six take all neighbours from the right, the last six from the left.
@@ -250,10 +294,18 @@ struct Ops {
   }
 
   // blur passes in both directions, then the passes of the larger of blurH/blurV in its direction only.
+  // t: scratch plane of the size of m.
   void blur(const Plane<T>& m, const Plane<T>& t, int type, int blurH, int blurV) const {
     const int both = std::min(blurH, blurV), rest = std::max(blurH, blurV) - both;
-    for (int i = 0; i < both; i++) blurPass(m, t, type, true, true);
-    for (int i = 0; i < rest; i++) blurPass(m, t, type, blurH > both, blurV > both);
+    const bool hz = blurH > both, vt = blurV > both;
+    const int group = passGroup(m.w, m.h, type);
+    if (group == 0) {
+      for (int i = 0; i < both; i++) blurSweeps(m, t, type, true, true);
+      for (int i = 0; i < rest; i++) blurSweeps(m, t, type, hz, vt);
+      return;
+    }
+    for (int i = 0; i < both; i += group) blurPasses(m, type, true, true, std::min(group, both - i));
+    for (int i = 0; i < rest; i += group) blurPasses(m, type, hz, vt, std::min(group, rest - i));
   }
 
   // Luma mask to chroma size. 4:2:0 and 4:2:2 as aWarpSharpMT (MPEG-1: rounded pair averages, horizontal first;
