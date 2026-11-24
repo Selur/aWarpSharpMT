@@ -26,6 +26,7 @@ struct S {
   static V8 avg8(V8 a, V8 b) { return vrhaddq_u8(a, b); }
   static V8 absd8(V8 a, V8 b) { return vabdq_u8(a, b); }
   static V8 adds8(V8 a, V8 b) { return vqaddq_u8(a, b); }
+  static V8 add8(V8 a, V8 b) { return vaddq_u8(a, b); }
   static V8 max8(V8 a, V8 b) { return vmaxq_u8(a, b); }
   static V8 min8(V8 a, V8 b) { return vminq_u8(a, b); }
 
@@ -35,6 +36,8 @@ struct S {
   static V16 avg16(V16 a, V16 b) { return vrhaddq_u16(a, b); }
   static V16 absd16(V16 a, V16 b) { return vabdq_u16(a, b); }
   static V16 adds16(V16 a, V16 b) { return vqaddq_u16(a, b); }
+  static V16 add16(V16 a, V16 b) { return vaddq_u16(a, b); }
+  static V16 and16(V16 a, V16 b) { return vandq_u16(a, b); }
   static V16 max16(V16 a, V16 b) { return vmaxq_u16(a, b); }
   static V16 min16(V16 a, V16 b) { return vminq_u16(a, b); }
 

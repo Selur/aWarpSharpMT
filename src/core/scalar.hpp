@@ -45,6 +45,31 @@ void sobelRowScalar(const T* u, const T* m, const T* d, T* dst, int x0, int x1, 
                        load(d, x), load(d, x + 1), thresh, pmax));
 }
 
+// MarcFD's edge mask of one sample: the gradient sum wraps (integer: & wrap, float: minus wrap once it reaches wrap),
+// then x3, + |h - v|, x3, each clamped at pixel_max; the right side of h averages all four corners.
+inline int wrapSum(int s, int wrap) { return s & wrap; }
+inline float wrapSum(float s, float wrap) { return s >= wrap ? s - wrap : s; }
+
+template <typename N>
+inline N sobelOrigPx(N ul, N uc, N ur, N ml, N mr, N dl, N dc, N dr, N thresh, N pmax, N wrap) {
+  const N top = avg(ul, ur), bottom = avg(dl, dr);
+  const N v = absd(avg(uc, top), avg(dc, bottom));
+  const N h = absd(avg(ml, avg(ul, dl)), avg(mr, avg(top, bottom)));
+  const N sum = wrapSum(h + v, wrap);
+  N e = std::min(pmax, std::min(pmax, sum + sum) + sum);
+  e = std::min(pmax, e + absd(h, v));
+  e = std::min(pmax, std::min(pmax, e + e) + e);
+  return std::min(e, thresh);
+}
+
+template <typename T>
+void sobelOrigRowScalar(const T* u, const T* m, const T* d, T* dst, int x0, int x1, Num<T> thresh, Num<T> pmax,
+                        Num<T> wrap) {
+  for (int x = x0; x < x1; x++)
+    dst[x] = T(sobelOrigPx(load(u, x - 1), load(u, x), load(u, x + 1), load(m, x - 1), load(m, x + 1), load(d, x - 1),
+                           load(d, x), load(d, x + 1), thresh, pmax, wrap));
+}
+
 // Radius 6 blur of a centre sample c and its six pairs of neighbours at distance 1..6 (p[k], q[k]).
 template <typename N>
 inline N blur6(N c, const N* p, const N* q) {

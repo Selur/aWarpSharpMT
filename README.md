@@ -174,8 +174,8 @@ original is reproduced exactly: the luma of `aBlur(aSobel(thresh=T, mask=1), typ
 `aWarpSharp(original=true, bm=0, show=true, thresh=T/256, blurlevel=L)` (tested for every format). The warp of
 aWarpSharp2 stays as it is, so `aWarpSharp2(mask=1, type=2)` is a new combination, not the original algorithm.
 
-`mask=1` runs in plain C: VapourSynth, 1080p 8 bit, one thread: `aSobel` 319 fps against 2417 fps with `mask=0`,
-`aWarpSharp2` 148 against 250 fps (32 threads: 2190 against 2902 fps).
+`mask=1` has SSE4.1, AVX2 and NEON code like `mask=0` and is as fast: VapourSynth, 1080p 8 bit, one thread,
+`aWarpSharp2` 247 fps with `mask=1` against 249 fps with `mask=0` (32 threads: 2837 against 2848 fps).
 
 ## Formats
 

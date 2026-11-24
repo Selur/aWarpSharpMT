@@ -34,6 +34,9 @@ template <typename T>
 struct KernelSet {
   // Edge mask from the rows above, at and below.
   void (*sobel)(const T* up, const T* mid, const T* down, T* dst, int x0, int x1, Num<T> thresh, Num<T> pixel_max);
+  // The same with MarcFD's formula (mask=1); wrap: 2^bits - 1 (integer), 256/255 (float).
+  void (*sobelOrig)(const T* up, const T* mid, const T* down, T* dst, int x0, int x1, Num<T> thresh, Num<T> pixel_max,
+                    Num<T> wrap);
   // Horizontal blur: radius 6 for a whole row of at least 12 samples, radius 2 for the symmetric part [x0, x1).
   void (*blurH6)(const T* src, T* dst, int w);
   void (*blurH2)(const T* src, T* dst, int x0, int x1);

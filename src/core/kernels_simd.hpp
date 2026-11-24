@@ -9,8 +9,8 @@
 // vectors, the last one overlapping the previous; ranges shorter than one vector run the scalar code.
 //
 // Interface S:
-//   V8 (N8 x u8):  ld8, st8, set8, avg8, absd8, adds8, max8, min8
-//   V16 (N16 x u16): ld16, st16, set16, avg16, absd16, adds16, max16, min16
+//   V8 (N8 x u8):  ld8, st8, set8, avg8, absd8, adds8, add8 (wrapping), max8, min8
+//   V16 (N16 x u16): ld16, st16, set16, avg16, absd16, adds16, add16 (wrapping), and16, max16, min16
 //   VF (NI x f32): ldf, stf, setf, addf, subf, mulf, minf, maxf, absf, floorf_, ltf (mask MF), gef, self (m ? a : b)
 //   VI (NI x i32): setI, iotaI (0, 1, ...), ld8I / ld16I (widening loads of NI samples), ldI / stI (int32 arrays),
 //                  addI, subI, mulI, sraI<k>, sllI<k>, andI, minI, maxI, ltI (mask MI), selI (m ? a : b),
@@ -83,6 +83,66 @@ void sobelF(const float* u, const float* m, const float* d, float* dst, int x0, 
     S::stf(dst + x, sobelVec(S::ldf(u + x - 1), S::ldf(u + x), S::ldf(u + x + 1), S::ldf(m + x - 1), S::ldf(m + x + 1),
                              S::ldf(d + x - 1), S::ldf(d + x), S::ldf(d + x + 1), thr, avgF, absdF, adds, S::maxf,
                              S::minf));
+  });
+}
+
+// MarcFD's mask (mask=1, sobelOrigPx). The steps after the wrap only add non-negative values and end in min(., thresh),
+// so saturating at 255/65535 instead of pixel_max gives the same result, as for sobelVec.
+template <typename V, typename AVG, typename ABSD, typename ADDS, typename WRAP, typename MIN>
+inline V sobelOrigVec(V ul, V uc, V ur, V ml, V mr, V dl, V dc, V dr, V thr, AVG avg, ABSD absd, ADDS adds,
+                      WRAP wrapAdd, MIN vmin) {
+  const V top = avg(ul, ur), bottom = avg(dl, dr);
+  const V v = absd(avg(uc, top), avg(dc, bottom));
+  const V h = absd(avg(ml, avg(ul, dl)), avg(mr, avg(top, bottom)));
+  const V sum = wrapAdd(h, v);
+  V e = adds(adds(sum, sum), sum);
+  e = adds(e, absd(h, v));
+  e = adds(adds(e, e), e);
+  return vmin(e, thr);
+}
+
+void sobelOrig8(const uint8_t* u, const uint8_t* m, const uint8_t* d, uint8_t* dst, int x0, int x1, int thresh, int pmax,
+                int wrap) {
+  constexpr int N = S::N8;
+  if (x1 - x0 < N) return sobelOrigRowScalar(u, m, d, dst, x0, x1, thresh, pmax, wrap);
+  const typename S::V8 thr = S::set8(thresh);
+  forRange(x0, x1, N, [&](int x) {
+    S::st8(dst + x, sobelOrigVec(S::ld8(u + x - 1), S::ld8(u + x), S::ld8(u + x + 1), S::ld8(m + x - 1),
+                                 S::ld8(m + x + 1), S::ld8(d + x - 1), S::ld8(d + x), S::ld8(d + x + 1), thr, S::avg8,
+                                 S::absd8, S::adds8, S::add8, S::min8));
+  });
+}
+
+void sobelOrig16(const uint16_t* u, const uint16_t* m, const uint16_t* d, uint16_t* dst, int x0, int x1, int thresh,
+                 int pmax, int wrap) {
+  using V16 = typename S::V16;
+  constexpr int N = S::N16;
+  if (x1 - x0 < N) return sobelOrigRowScalar(u, m, d, dst, x0, x1, thresh, pmax, wrap);
+  const V16 thr = S::set16(thresh), wm = S::set16(wrap);
+  // h + v < 2^(bits + 1) <= 2^16: the 16-bit wrapping add keeps every bit below 2^bits.
+  auto wrapAdd = [&](V16 a, V16 b) { return S::and16(S::add16(a, b), wm); };
+  forRange(x0, x1, N, [&](int x) {
+    S::st16(dst + x, sobelOrigVec(S::ld16(u + x - 1), S::ld16(u + x), S::ld16(u + x + 1), S::ld16(m + x - 1),
+                                  S::ld16(m + x + 1), S::ld16(d + x - 1), S::ld16(d + x), S::ld16(d + x + 1), thr,
+                                  S::avg16, S::absd16, S::adds16, wrapAdd, S::min16));
+  });
+}
+
+void sobelOrigF(const float* u, const float* m, const float* d, float* dst, int x0, int x1, float thresh, float pmax,
+                float wrap) {
+  using VF = typename S::VF;
+  constexpr int N = S::NI;
+  if (x1 - x0 < N) return sobelOrigRowScalar(u, m, d, dst, x0, x1, thresh, pmax, wrap);
+  const VF thr = S::setf(thresh), pm = S::setf(pmax), wr = S::setf(wrap);
+  auto adds = [&](VF a, VF b) { return S::minf(S::addf(a, b), pm); };
+  auto wrapAdd = [&](VF a, VF b) {
+    const VF s = S::addf(a, b);
+    return S::self(S::gef(s, wr), S::subf(s, wr), s);
+  };
+  forRange(x0, x1, N, [&](int x) {
+    S::stf(dst + x, sobelOrigVec(S::ldf(u + x - 1), S::ldf(u + x), S::ldf(u + x + 1), S::ldf(m + x - 1),
+                                 S::ldf(m + x + 1), S::ldf(d + x - 1), S::ldf(d + x), S::ldf(d + x + 1), thr, avgF,
+                                 absdF, adds, wrapAdd, S::minf));
   });
 }
 
@@ -457,6 +517,7 @@ void warpF(const WarpRow<float>& r, int x0, int x1) {
 KernelSet<uint8_t> set8() {
   KernelSet<uint8_t> k;
   k.sobel = sobel8;
+  k.sobelOrig = sobelOrig8;
   k.blurH6 = blurH6<uint8_t>;
   k.blurH2 = blurH2<uint8_t>;
   k.blurV6 = blurV6<uint8_t>;
@@ -469,6 +530,7 @@ KernelSet<uint8_t> set8() {
 KernelSet<uint16_t> set16() {
   KernelSet<uint16_t> k;
   k.sobel = sobel16;
+  k.sobelOrig = sobelOrig16;
   k.blurH6 = blurH6<uint16_t>;
   k.blurH2 = blurH2<uint16_t>;
   k.blurV6 = blurV6<uint16_t>;
@@ -481,6 +543,7 @@ KernelSet<uint16_t> set16() {
 KernelSet<float> setF() {
   KernelSet<float> k;
   k.sobel = sobelF;
+  k.sobelOrig = sobelOrigF;
   k.blurH6 = blurH6<float>;
   k.blurH2 = blurH2<float>;
   k.blurV6 = blurV6<float>;

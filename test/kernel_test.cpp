@@ -69,6 +69,10 @@ bool testSet(const KernelSet<T>& c, const KernelSet<T>& s, const char* isa, int 
         c.sobel(u.p(), m.p(), d.p(), oc.p(), x0, x1, thr, pmax);
         s.sobel(u.p(), m.p(), d.p(), os.p(), x0, x1, thr, pmax);
         if (!same(oc.p(), os.p(), w, "sobel", isa, w, bits)) return false;
+        const Num<T> wrap = fl ? Num<T>(256.0f / 255.0f) : Num<T>((1 << (fl ? 1 : bits)) - 1);
+        c.sobelOrig(u.p(), m.p(), d.p(), oc.p(), x0, x1, thr, pmax, wrap);
+        s.sobelOrig(u.p(), m.p(), d.p(), os.p(), x0, x1, thr, pmax, wrap);
+        if (!same(oc.p(), os.p(), w, "sobelOrig", isa, w, bits)) return false;
       }
       if (w >= 12) {
         Row<T> src(w, bits), oc(w, bits);

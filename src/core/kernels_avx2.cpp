@@ -27,6 +27,7 @@ struct S {
   static V8 avg8(V8 a, V8 b) { return _mm256_avg_epu8(a, b); }
   static V8 absd8(V8 a, V8 b) { return _mm256_or_si256(_mm256_subs_epu8(a, b), _mm256_subs_epu8(b, a)); }
   static V8 adds8(V8 a, V8 b) { return _mm256_adds_epu8(a, b); }
+  static V8 add8(V8 a, V8 b) { return _mm256_add_epi8(a, b); }
   static V8 max8(V8 a, V8 b) { return _mm256_max_epu8(a, b); }
   static V8 min8(V8 a, V8 b) { return _mm256_min_epu8(a, b); }
 
@@ -36,6 +37,8 @@ struct S {
   static V16 avg16(V16 a, V16 b) { return _mm256_avg_epu16(a, b); }
   static V16 absd16(V16 a, V16 b) { return _mm256_or_si256(_mm256_subs_epu16(a, b), _mm256_subs_epu16(b, a)); }
   static V16 adds16(V16 a, V16 b) { return _mm256_adds_epu16(a, b); }
+  static V16 add16(V16 a, V16 b) { return _mm256_add_epi16(a, b); }
+  static V16 and16(V16 a, V16 b) { return _mm256_and_si256(a, b); }
   static V16 max16(V16 a, V16 b) { return _mm256_max_epu16(a, b); }
   static V16 min16(V16 a, V16 b) { return _mm256_min_epu16(a, b); }
 

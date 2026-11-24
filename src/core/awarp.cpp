@@ -160,41 +160,6 @@ void padRowClamped(const T* r, int w, int pad, Num<T>* out) {
   for (int x = 0; x < w; x++) out[pad + x] = load(r, x);
 }
 
-// MarcFD's edge mask: gradient sum wrapping at 2^bits (PADDB; float 256/255), x3, + |h - v|, x3, capped at thr; the
-// right side of h averages all four corners; borders clamped.
-template <typename T>
-void sobelOrigPlane(const CPlane<T>& s, const Plane<T>& d, Num<T> thr, int bits) {
-  using N = Num<T>;
-  const N pmax = pixelMax<T>(bits);
-  auto wrap = [&](N v) -> N {
-    if constexpr (std::is_same<T, float>::value)
-      return v >= 256.0f / 255.0f ? v - 256.0f / 255.0f : v;
-    else
-      return v & ((1 << bits) - 1);
-  };
-  const int w = s.w, h = s.h;
-  std::vector<N> buf(3 * size_t(w + 2));
-  N* const rows[3] = {buf.data(), buf.data() + (w + 2), buf.data() + 2 * (w + 2)};
-  for (int y = 0; y < h; y++) {
-    padRowClamped(s.row(std::max(0, y - 1)), w, 1, rows[0]);
-    padRowClamped(s.row(y), w, 1, rows[1]);
-    padRowClamped(s.row(std::min(h - 1, y + 1)), w, 1, rows[2]);
-    const N *u = rows[0] + 1, *m = rows[1] + 1, *dn = rows[2] + 1;
-    T* o = d.row(y);
-    for (int x = 0; x < w; x++) {
-      const N tl = u[x - 1], tr = u[x + 1], bl = dn[x - 1], br = dn[x + 1];
-      const N top = avg(tl, tr), bottom = avg(bl, br);
-      const N v = absd(avg(u[x], top), avg(dn[x], bottom));
-      const N hz = absd(avg(m[x - 1], avg(tl, bl)), avg(m[x + 1], avg(top, bottom)));
-      const N sum = wrap(hz + v);
-      N e = std::min(pmax, std::min(pmax, sum + sum) + sum);
-      e = std::min(pmax, e + absd(hz, v));
-      e = std::min(pmax, std::min(pmax, e + e) + e);
-      o[x] = T(std::min(e, thr));
-    }
-  }
-}
-
 template <typename T>
 struct Ops {
   const KernelSet<T>& k;
@@ -234,10 +199,40 @@ struct Ops {
     }
   }
 
+  // MarcFD's edge mask (mask=1, sobelOrigPx): every row and column, neighbours clamped at the borders.
+  void sobelOrig(const CPlane<T>& s, const Plane<T>& d, int thresh8) const {
+    using N = Num<T>;
+    const N thr = scale8<T>(thresh8, bits), pmax = pixelMax<T>(bits);
+    N wrap;
+    if constexpr (std::is_same<T, float>::value)
+      wrap = 256.0f / 255.0f;
+    else
+      wrap = (1 << bits) - 1;
+    const int w = s.w, h = s.h;
+    for (int y = 0; y < h; y++) {
+      const T* u = s.row(std::max(0, y - 1));
+      const T* m = s.row(y);
+      const T* dn = s.row(std::min(h - 1, y + 1));
+      T* o = d.row(y);
+      auto px = [&](int x) {
+        const int l = std::max(0, x - 1), r = std::min(w - 1, x + 1);
+        return T(sobelOrigPx(load(u, l), load(u, x), load(u, r), load(m, l), load(m, r), load(dn, l), load(dn, x),
+                             load(dn, r), thr, pmax, wrap));
+      };
+      if (w < 3) {
+        for (int x = 0; x < w; x++) o[x] = px(x);
+        continue;
+      }
+      k.sobelOrig(u, m, dn, o, 1, w - 1, thr, pmax, wrap);
+      o[0] = px(0);
+      o[w - 1] = px(w - 1);
+    }
+  }
+
   // mask 0: aWarpSharp2's edge mask, 1: the original's.
   void mask(const CPlane<T>& s, const Plane<T>& d, int thresh8, int mode) const {
     if (mode == 1)
-      sobelOrigPlane(s, d, scale8<T>(thresh8, bits), bits);
+      sobelOrig(s, d, thresh8);
     else
       sobel(s, d, thresh8);
   }
@@ -678,7 +673,6 @@ struct Orig {
 
   static void padRow(const T* r, int w, int pad, N* out) { padRowClamped(r, w, pad, out); }
 
-  void sobel(const CPlane<T>& s, const Plane<T>& d, N thr) const { sobelOrigPlane(s, d, thr, bits); }
 
   static N blur7(const N* q) {
     const N outer = avg(avg(q[6], q[5]), avg(q[4], q[3]));
@@ -839,13 +833,12 @@ void Engine::runOriginal(const FrameView& srcf, const FrameOut& outf) const {
     dst[i] = view<T>(outf, i, fmt_.planeWidth(i), fmt_.planeHeight(i));
     copyPlane(src[i], dst[i]);
   }
-  const Num<T> thr = scale8<T>(p.thresh, fmt_.bits);
   const int passes = p.origBlur * (p.origBm == 2 ? 1 : 3);
   const int cpasses = (p.origBlur / 2) * (p.origBm == 2 ? 1 : 3);
   const int depth = std::min(p.origDepth, 32767);
 
   Buffer<T> mask(fmt_.width, fmt_.height), tmp(fmt_.width, fmt_.height);
-  og.sobel(src[0], mask.plane, thr);
+  ops.mask(src[0], mask.plane, p.thresh, 1);
   og.blur(mask.plane, tmp.plane, p.origBm, passes);
   if (p.origShow) {
     copyPlane(CPlane<T>(mask.plane), dst[0]);
@@ -865,7 +858,7 @@ void Engine::runOriginal(const FrameView& srcf, const FrameOut& outf) const {
     for (int i = 1; i < np; i++) og.warp(src[i], mc.plane, dst[i], depthH, depthV);
   } else {
     for (int i = 1; i < np; i++) {
-      og.sobel(src[i], mc.plane, thr);
+      ops.mask(src[i], mc.plane, p.thresh, 1);
       og.blur(mc.plane, t, p.origBm, cpasses);
       og.warp(src[i], mc.plane, dst[i], depthH, depthV);
     }
