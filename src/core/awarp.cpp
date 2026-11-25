@@ -160,10 +160,168 @@ void padRowClamped(const T* r, int w, int pad, Num<T>* out) {
   for (int x = 0; x < w; x++) out[pad + x] = load(r, x);
 }
 
+// MarcFD's aWarpSharp as written out in aWarpSharpMT 2.2.0 (8-bit YV12 there), on the sample scale of any bit depth:
+// the blurs of bm 0..2 (aBlur/aWarpSharp2 type 2..4) and the warp of aWarp/aWarpSharp2 wmode=1. Plain C.
+template <typename T>
+struct Orig {
+  using N = Num<T>;
+  int bits;
+  N pmax;
+
+  static void padRow(const T* r, int w, int pad, N* out) { padRowClamped(r, w, pad, out); }
+
+
+  static N blur7(const N* q) {
+    const N outer = avg(avg(q[6], q[5]), avg(q[4], q[3]));
+    const N inner = avg(avg(q[2], q[1]), q[0]);
+    return avg(avg(outer, inner), inner);
+  }
+
+  void blurH(const CPlane<T>& s, const Plane<T>& d) const {
+    const int w = s.w;
+    std::vector<N> buf(size_t(w) + 12);
+    const N* r = buf.data() + 6;
+    for (int y = 0; y < s.h; y++) {
+      padRow(s.row(y), w, 6, buf.data());
+      T* o = d.row(y);
+      for (int x = 0; x < w; x++) {
+        N q[7];
+        q[0] = r[x];
+        for (int k = 1; k <= 6; k++) q[k] = avg(r[x - k], r[x + k]);
+        o[x] = T(blur7(q));
+      }
+    }
+  }
+
+  // Rows 0..5 read six rows below, the last six six rows above (these win in planes of 7..11 rows), the rest both.
+  void blurV(const CPlane<T>& s, const Plane<T>& d) const {
+    const int w = s.w, h = s.h;
+    for (int y = 0; y < h; y++) {
+      const int mode = (h > 6 && y >= h - 6) ? 2 : (y < 6 ? 0 : 1);
+      const T* up[7];
+      const T* dn[7];
+      for (int k = 0; k <= 6; k++) {
+        up[k] = s.row(std::max(0, std::min(h - 1, y - k)));
+        dn[k] = s.row(std::max(0, std::min(h - 1, y + k)));
+      }
+      T* o = d.row(y);
+      for (int x = 0; x < w; x++) {
+        N q[7];
+        q[0] = load(dn[0], x);
+        for (int k = 1; k <= 6; k++)
+          q[k] = mode == 0 ? load(dn[k], x) : (mode == 2 ? load(up[k], x) : avg(load(up[k], x), load(dn[k], x)));
+        o[x] = T(blur7(q));
+      }
+    }
+  }
+
+  void blurH2(const CPlane<T>& s, const Plane<T>& d) const {
+    const int w = s.w;
+    std::vector<N> buf(size_t(w) + 4);
+    const N* c = buf.data() + 2;
+    for (int y = 0; y < s.h; y++) {
+      padRow(s.row(y), w, 2, buf.data());
+      T* o = d.row(y);
+      for (int x = 0; x < w; x++) o[x] = T(avg(avg(c[x], avg(c[x - 1], c[x + 1])), avg(c[x - 2], c[x + 2])));
+    }
+  }
+
+  // Rows 2..h-3; the centre row is read twice where the next row belongs (the original's MM3/MM4 load).
+  void blurV2(const CPlane<T>& s, const Plane<T>& d) const {
+    const int w = s.w, h = s.h;
+    if (h < 4) return;
+    for (int y = 2; y < h - 2; y++) {
+      const T *a = s.row(y - 2), *b = s.row(y - 1), *c = s.row(y), *e = s.row(y + 2);
+      T* o = d.row(y);
+      for (int x = 0; x < w; x++)
+        o[x] = T(avg(avg(load(c, x), avg(load(b, x), load(c, x))), avg(load(a, x), load(e, x))));
+    }
+  }
+
+  void blur(const Plane<T>& m, const Plane<T>& t, int bm, int passes) const {
+    for (int i = 0; i < passes; i++) {
+      if (bm == 0) {
+        blurHQPass(m);
+      } else if (bm == 2) {
+        blurH(m, t);
+        blurV(t, m);
+      } else {
+        blurH2(m, t);
+        blurV2(t, m);
+      }
+    }
+  }
+
+  static int64_t floorDiv(int64_t x, int64_t d) { return x >= 0 ? x / d : -((-x + d - 1) / d); }
+
+  // Rows 0 and h-1 are copied. dx/dy in 1/256 pixel from the gradient of the mask on the 8-bit scale (PMULHW and
+  // PADDSW of the original), source rows clamped to the plane.
+  void warp(const CPlane<T>& s, const CPlane<T>& e, const Plane<T>& d, int depthH, int depthV) const {
+    const int w = s.w, h = s.h, wm1 = w - 1;
+    for (int y = 0; y < h; y++) {
+      T* o = d.row(y);
+      if (y == 0 || y == h - 1) {
+        std::memcpy(o, s.row(y), size_t(w) * sizeof(T));
+        continue;
+      }
+      const T* above = e.row(y - 1);
+      const T* below = e.row(y + 1);
+      const int ym1 = y - 1;
+      for (int x = 0; x < w; x++) {
+        const N gx = load(above, std::max(0, x - 1)) - load(above, std::min(wm1, x + 1));
+        const N gy = load(above, x) - load(below, x);
+        if constexpr (std::is_same<T, float>::value) {
+          // The integer steps with exact fractions: 2 * gx * 255 * 128 * depth / 65536 in 1/256 pixel.
+          float dx = std::max(-32768.0f, std::min(32767.0f, gx * 255.0f * float(depthH) / 256.0f));
+          float dy = std::max(-32768.0f, std::min(32767.0f, gy * 255.0f * float(depthV) / 256.0f));
+          dy = std::max(std::max(-float(ym1) * 256.0f, -16384.0f), std::min(dy, std::min(float(h - ym1) * 256.0f - 1.0f, 16384.0f)));
+          const float sxf = float(x) + dx / 256.0f, syf = float(y) + dy / 256.0f;
+          int sx = int(std::floor(sxf)), sy = int(std::floor(syf));
+          float fx = sxf - float(sx);
+          const float fy = syf - float(sy);
+          if (sx < 0 || sx >= wm1) {
+            sx = std::max(0, std::min(sx, wm1));
+            fx = 0.0f;
+          }
+          const int sx1 = std::min(sx + 1, wm1);
+          const T* a = s.row(std::min(sy, h - 1));
+          const T* b = s.row(std::min(sy + 1, h - 1));
+          const float top = a[sx] + (a[sx1] - a[sx]) * fx;
+          const float bot = b[sx] + (b[sx1] - b[sx]) * fx;
+          o[x] = top + (bot - top) * fy;
+        } else {
+          const int64_t den = int64_t(65536) << (bits - 8);
+          const int dx = int(std::max<int64_t>(-32768, std::min<int64_t>(32767, 2 * floorDiv(int64_t(gx) * 128 * depthH, den))));
+          int dy = int(std::max<int64_t>(-32768, std::min<int64_t>(32767, 2 * floorDiv(int64_t(gy) * 128 * depthV, den))));
+          dy = std::max(std::max(-ym1 * 256, -16384), std::min(dy, std::min((h - ym1) * 256 - 1, 16384)));
+          const int ix = int(floorDiv(dx, 256)), iy = int(floorDiv(dy, 256));
+          int sx = x + ix;
+          const int sy = y + iy;
+          int fx = dx - ix * 256;
+          const int fy = dy - iy * 256;
+          if (sx < 0 || sx >= wm1) {
+            sx = std::max(0, std::min(sx, wm1));
+            fx = 0;
+          }
+          const int sx1 = std::min(sx + 1, wm1);
+          const T* a = s.row(std::min(sy, h - 1));
+          const T* b = s.row(std::min(sy + 1, h - 1));
+          const int top = (a[sx] * (256 - fx) + a[sx1] * fx + 128) / 256;
+          const int bot = (b[sx] * (256 - fx) + b[sx1] * fx + 128) / 256;
+          o[x] = T((top * (256 - fy) + bot * fy + 128) / 256);
+        }
+      }
+    }
+  }
+};
+
 template <typename T>
 struct Ops {
   const KernelSet<T>& k;
   int bits;
+  int wmode = 0;  // warp: 0 aWarpSharp2, 1 MarcFD's (Orig::warp)
+
+  Orig<T> orig() const { return Orig<T>{bits, pixelMax<T>(bits)}; }
 
   // Edge mask. Integer samples keep two quirks of the SSE2/AVX code of the original, which works in 16-byte blocks:
   // in rows 0 and 1 the first block takes the sample itself for the left neighbour in the row above and in the row,
@@ -368,9 +526,9 @@ struct Ops {
   // blur passes in both directions, then the passes of the larger of blurH/blurV in its direction only.
   // t: scratch plane of the size of m.
   void blur(const Plane<T>& m, const Plane<T>& t, int type, int blurH, int blurV) const {
-    if (type == 2) {
-      // blurH == blurV (checked): each HQ pass blurs both directions
-      for (int i = 0; i < blurH; i++) blurHQPass(m);
+    if (type >= 2) {
+      // blurH == blurV (checked): each pass of the original's blurs works in both directions
+      orig().blur(m, t, type == 2 ? 0 : (type == 3 ? 1 : 2), blurH);
       return;
     }
     const int both = std::min(blurH, blurV), rest = std::max(blurH, blurV) - both;
@@ -432,7 +590,12 @@ struct Ops {
   }
 
   // Warp of a plane along a mask of its size; src is the plane itself (smagl 0) or four times its size (smagl 2).
+  // wmode 1 (smagl 0 only): MarcFD's warp, depths in its units (aWarpSharp's depth * blurlevel * 128).
   void warp(const CPlane<T>& src, const CPlane<T>& e, const Plane<T>& d, int depthH, int depthV, int smagl) const {
+    if (wmode == 1) {
+      orig().warp(src, e, d, depthH, depthV);
+      return;
+    }
     WarpRow<T> r;
     r.src = src.p;
     r.src_stride = src.stride;
@@ -480,10 +643,12 @@ Engine::Engine(const Params& p, const Format& f) : p_(p), fmt_(f) {
     if (p.blurV < 0) fail("'blurV' must be >=0");
     if (p.blurC < 0) fail("'blurC' must be >=0");
     if (p.blurVC < 0) fail("'blurVC' must be >=0");
-    if (p.type < 0 || p.type > 2) fail("'type' must be 0..2");
+    if (p.type < 0 || p.type > 4) fail("'type' must be 0..4");
     if (p.mask < 0 || p.mask > 1) fail("'mask' must be 0,1");
-    if (p.type == 2 && (p.blurV != p.blur || p.blurVC != p.blurC))
-      fail("type=2 blurs both directions in one pass: 'blurV' must equal 'blur' and 'blurVC' 'blurC'");
+    if (p.wmode < 0 || p.wmode > 1) fail("'wmode' must be 0,1");
+    if (p.type >= 2 && (p.blurV != p.blur || p.blurVC != p.blurC))
+      fail("type=" + std::to_string(p.type) +
+           " blurs both directions in one pass: 'blurV' must equal 'blur' and 'blurVC' 'blurC'");
     if (p.depth < -128 || p.depth > 127) fail("'depth' must be -128..127");
     if (p.depthC < -128 || p.depthC > 127) fail("'depthC' must be -128..127");
     if (p.depthV < -128 || p.depthV > 127) fail("'depthV' must be -128..127");
@@ -497,11 +662,11 @@ Engine::Engine(const Params& p, const Format& f) : p_(p), fmt_(f) {
 
 void Engine::process(const FrameView& src, const FrameView& edge, const FrameOut& out) const {
   if (fmt_.bits == 32) {
-    p_.original ? runOriginal<float>(src, out) : run<float>(src, edge, out);
+    run<float>(src, edge, out);
   } else if (fmt_.bits > 8) {
-    p_.original ? runOriginal<uint16_t>(src, out) : run<uint16_t>(src, edge, out);
+    run<uint16_t>(src, edge, out);
   } else {
-    p_.original ? runOriginal<uint8_t>(src, out) : run<uint8_t>(src, edge, out);
+    run<uint8_t>(src, edge, out);
   }
 }
 
@@ -532,7 +697,7 @@ Plane<T> view(const FrameOut& f, int i, int w, int h) {
 template <typename T>
 void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& outf) const {
   const Params& p = p_;
-  const Ops<T> ops{k_->get<T>(), fmt_.bits};
+  const Ops<T> ops{k_->get<T>(), fmt_.bits, p.wmode};
   const int np = fmt_.planes;
   const int ch = p.chroma;
   const int scale = p.kind == Kind::Warp4 ? 4 : 1;
@@ -543,6 +708,19 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
     src[i] = view<T>(srcf, i, w * scale, h * scale);
     dst[i] = view<T>(outf, i, w, h);
     if (p.kind == Kind::Warp || p.kind == Kind::Warp4) edg[i] = view<T>(edgef, i, w, h);
+  }
+  // Warp depths; wmode=1 counts in the original's units: aWarpSharp2 depth * 256, aWarpSharp's depth * blurlevel * 128
+  // (original=true, chroma divided by the subsampling in each direction).
+  int dH = p.depth, dV = p.depthV, dCH = p.depthC, dCV = p.depthVC;
+  if (p.original) {
+    dH = dV = std::min(p.origDepth, 32767);
+    dCH = std::min(p.origDepth >> fmt_.ssw, 32767);
+    dCV = std::min(p.origDepth >> fmt_.ssh, 32767);
+  } else if (p.wmode == 1) {
+    dH *= 256;
+    dV *= 256;
+    dCH *= 256;
+    dCV *= 256;
   }
   const T neutral = neutralChroma<T>(fmt_.bits);
   auto chromaFill = [&]() {
@@ -593,20 +771,20 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
     case Kind::Warp4: {
       const int smagl = p.kind == Kind::Warp4 ? 2 : 0;
       const bool w4 = p.kind == Kind::Warp4;
-      if (ch < 5 && (w4 || p.depth != 0 || p.depthV != 0))
-        ops.warp(src[0], edg[0], dst[0], p.depth, p.depthV, smagl);
+      if (ch < 5 && (w4 || dH != 0 || dV != 0))
+        ops.warp(src[0], edg[0], dst[0], dH, dV, smagl);
       else if (w4)
         Ops<T>::pointSample(src[0], dst[0]);
       else
         copyPlane(src[0], dst[0]);
       if (np == 1) break;
-      const bool cdepth = w4 || p.depthC != 0 || p.depthVC != 0;
+      const bool cdepth = w4 || dCH != 0 || dCV != 0;
       if (ch == kChromaZero) {
         chromaFill();
       } else if (ch == kChromaIgnore || ch == kChromaCopy || !cdepth) {
         chromaCopy();
       } else if (ch == kChromaProcess || ch == kChromaOnly) {
-        for (int i = 1; i < np; i++) ops.warp(src[i], edg[i], dst[i], p.depthC, p.depthVC, smagl);
+        for (int i = 1; i < np; i++) ops.warp(src[i], edg[i], dst[i], dCH, dCV, smagl);
       } else {
         CPlane<T> guide = edg[0];
         Buffer<T> g(dst[1].w, dst[1].h);
@@ -614,7 +792,7 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
           ops.guide(edg[0], g.plane, fmt_.ssw, fmt_.ssh, p.mpeg2);
           guide = g.plane;
         }
-        for (int i = 1; i < np; i++) ops.warp(src[i], guide, dst[i], p.depthC, p.depthVC, smagl);
+        for (int i = 1; i < np; i++) ops.warp(src[i], guide, dst[i], dCH, dCV, smagl);
       }
       break;
     }
@@ -625,15 +803,20 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
       if (ch != kChromaOnly) {
         ops.mask(src[0], maskY.plane, p.thresh, p.mask);
         ops.blur(maskY.plane, dst[0], p.type, p.blur, p.blurV);
-        if (ch != kChromaGuideOnly && (p.depth != 0 || p.depthV != 0))
-          ops.warp(src[0], maskY.plane, dst[0], p.depth, p.depthV, 0);
+        if (p.origShow) {
+          copyPlane(CPlane<T>(maskY.plane), dst[0]);
+          for (int i = 1; i < np; i++) copyPlane(src[i], dst[i]);
+          break;
+        }
+        if (ch != kChromaGuideOnly && (dH != 0 || dV != 0))
+          ops.warp(src[0], maskY.plane, dst[0], dH, dV, 0);
         else
           copyPlane(src[0], dst[0]);
       } else {
         copyPlane(src[0], dst[0]);
       }
       if (np == 1) break;
-      const bool cdepth = p.depthC != 0 || p.depthVC != 0;
+      const bool cdepth = dCH != 0 || dCV != 0;
       if (ch == kChromaZero) {
         chromaFill();
       } else if (ch == kChromaIgnore || ch == kChromaCopy || !cdepth) {
@@ -643,7 +826,7 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
         for (int i = 1; i < np; i++) {
           ops.mask(src[i], mc.plane, p.threshC, p.mask);
           ops.blur(mc.plane, dst[i], p.type, p.blurC, p.blurVC);
-          ops.warp(src[i], mc.plane, dst[i], p.depthC, p.depthVC, 0);
+          ops.warp(src[i], mc.plane, dst[i], dCH, dCV, 0);
         }
       } else {
         CPlane<T> guide = maskY.plane;
@@ -652,215 +835,9 @@ void Engine::run(const FrameView& srcf, const FrameView& edgef, const FrameOut& 
           ops.guide(maskY.plane, g.plane, fmt_.ssw, fmt_.ssh, p.mpeg2);
           guide = g.plane;
         }
-        for (int i = 1; i < np; i++) ops.warp(src[i], guide, dst[i], p.depthC, p.depthVC, 0);
+        for (int i = 1; i < np; i++) ops.warp(src[i], guide, dst[i], dCH, dCV, 0);
       }
       break;
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// aWarpSharp(original=true): MarcFD's aWarpSharp as written out in aWarpSharpMT 2.2.0 (8-bit YV12 there), on the
-// sample scale of any bit depth. Kept in plain C: the in-place HQ blur must run in row order.
-
-namespace {
-
-template <typename T>
-struct Orig {
-  using N = Num<T>;
-  int bits;
-  N pmax;
-
-  static void padRow(const T* r, int w, int pad, N* out) { padRowClamped(r, w, pad, out); }
-
-
-  static N blur7(const N* q) {
-    const N outer = avg(avg(q[6], q[5]), avg(q[4], q[3]));
-    const N inner = avg(avg(q[2], q[1]), q[0]);
-    return avg(avg(outer, inner), inner);
-  }
-
-  void blurH(const CPlane<T>& s, const Plane<T>& d) const {
-    const int w = s.w;
-    std::vector<N> buf(size_t(w) + 12);
-    const N* r = buf.data() + 6;
-    for (int y = 0; y < s.h; y++) {
-      padRow(s.row(y), w, 6, buf.data());
-      T* o = d.row(y);
-      for (int x = 0; x < w; x++) {
-        N q[7];
-        q[0] = r[x];
-        for (int k = 1; k <= 6; k++) q[k] = avg(r[x - k], r[x + k]);
-        o[x] = T(blur7(q));
-      }
-    }
-  }
-
-  // Rows 0..5 read six rows below, the last six six rows above (these win in planes of 7..11 rows), the rest both.
-  void blurV(const CPlane<T>& s, const Plane<T>& d) const {
-    const int w = s.w, h = s.h;
-    for (int y = 0; y < h; y++) {
-      const int mode = (h > 6 && y >= h - 6) ? 2 : (y < 6 ? 0 : 1);
-      const T* up[7];
-      const T* dn[7];
-      for (int k = 0; k <= 6; k++) {
-        up[k] = s.row(std::max(0, std::min(h - 1, y - k)));
-        dn[k] = s.row(std::max(0, std::min(h - 1, y + k)));
-      }
-      T* o = d.row(y);
-      for (int x = 0; x < w; x++) {
-        N q[7];
-        q[0] = load(dn[0], x);
-        for (int k = 1; k <= 6; k++)
-          q[k] = mode == 0 ? load(dn[k], x) : (mode == 2 ? load(up[k], x) : avg(load(up[k], x), load(dn[k], x)));
-        o[x] = T(blur7(q));
-      }
-    }
-  }
-
-  void blurH2(const CPlane<T>& s, const Plane<T>& d) const {
-    const int w = s.w;
-    std::vector<N> buf(size_t(w) + 4);
-    const N* c = buf.data() + 2;
-    for (int y = 0; y < s.h; y++) {
-      padRow(s.row(y), w, 2, buf.data());
-      T* o = d.row(y);
-      for (int x = 0; x < w; x++) o[x] = T(avg(avg(c[x], avg(c[x - 1], c[x + 1])), avg(c[x - 2], c[x + 2])));
-    }
-  }
-
-  // Rows 2..h-3; the centre row is read twice where the next row belongs (the original's MM3/MM4 load).
-  void blurV2(const CPlane<T>& s, const Plane<T>& d) const {
-    const int w = s.w, h = s.h;
-    if (h < 4) return;
-    for (int y = 2; y < h - 2; y++) {
-      const T *a = s.row(y - 2), *b = s.row(y - 1), *c = s.row(y), *e = s.row(y + 2);
-      T* o = d.row(y);
-      for (int x = 0; x < w; x++)
-        o[x] = T(avg(avg(load(c, x), avg(load(b, x), load(c, x))), avg(load(a, x), load(e, x))));
-    }
-  }
-
-  void blur(const Plane<T>& m, const Plane<T>& t, int bm, int passes) const {
-    for (int i = 0; i < passes; i++) {
-      if (bm == 0) {
-        blurHQPass(m);
-      } else if (bm == 2) {
-        blurH(m, t);
-        blurV(t, m);
-      } else {
-        blurH2(m, t);
-        blurV2(t, m);
-      }
-    }
-  }
-
-  static int64_t floorDiv(int64_t x, int64_t d) { return x >= 0 ? x / d : -((-x + d - 1) / d); }
-
-  // Rows 0 and h-1 are copied. dx/dy in 1/256 pixel from the gradient of the mask on the 8-bit scale (PMULHW and
-  // PADDSW of the original), source rows clamped to the plane.
-  void warp(const CPlane<T>& s, const CPlane<T>& e, const Plane<T>& d, int depthH, int depthV) const {
-    const int w = s.w, h = s.h, wm1 = w - 1;
-    for (int y = 0; y < h; y++) {
-      T* o = d.row(y);
-      if (y == 0 || y == h - 1) {
-        std::memcpy(o, s.row(y), size_t(w) * sizeof(T));
-        continue;
-      }
-      const T* above = e.row(y - 1);
-      const T* below = e.row(y + 1);
-      const int ym1 = y - 1;
-      for (int x = 0; x < w; x++) {
-        const N gx = load(above, std::max(0, x - 1)) - load(above, std::min(wm1, x + 1));
-        const N gy = load(above, x) - load(below, x);
-        if constexpr (std::is_same<T, float>::value) {
-          // The integer steps with exact fractions: 2 * gx * 255 * 128 * depth / 65536 in 1/256 pixel.
-          float dx = std::max(-32768.0f, std::min(32767.0f, gx * 255.0f * float(depthH) / 256.0f));
-          float dy = std::max(-32768.0f, std::min(32767.0f, gy * 255.0f * float(depthV) / 256.0f));
-          dy = std::max(std::max(-float(ym1) * 256.0f, -16384.0f), std::min(dy, std::min(float(h - ym1) * 256.0f - 1.0f, 16384.0f)));
-          const float sxf = float(x) + dx / 256.0f, syf = float(y) + dy / 256.0f;
-          int sx = int(std::floor(sxf)), sy = int(std::floor(syf));
-          float fx = sxf - float(sx);
-          const float fy = syf - float(sy);
-          if (sx < 0 || sx >= wm1) {
-            sx = std::max(0, std::min(sx, wm1));
-            fx = 0.0f;
-          }
-          const int sx1 = std::min(sx + 1, wm1);
-          const T* a = s.row(std::min(sy, h - 1));
-          const T* b = s.row(std::min(sy + 1, h - 1));
-          const float top = a[sx] + (a[sx1] - a[sx]) * fx;
-          const float bot = b[sx] + (b[sx1] - b[sx]) * fx;
-          o[x] = top + (bot - top) * fy;
-        } else {
-          const int64_t den = int64_t(65536) << (bits - 8);
-          const int dx = int(std::max<int64_t>(-32768, std::min<int64_t>(32767, 2 * floorDiv(int64_t(gx) * 128 * depthH, den))));
-          int dy = int(std::max<int64_t>(-32768, std::min<int64_t>(32767, 2 * floorDiv(int64_t(gy) * 128 * depthV, den))));
-          dy = std::max(std::max(-ym1 * 256, -16384), std::min(dy, std::min((h - ym1) * 256 - 1, 16384)));
-          const int ix = int(floorDiv(dx, 256)), iy = int(floorDiv(dy, 256));
-          int sx = x + ix;
-          const int sy = y + iy;
-          int fx = dx - ix * 256;
-          const int fy = dy - iy * 256;
-          if (sx < 0 || sx >= wm1) {
-            sx = std::max(0, std::min(sx, wm1));
-            fx = 0;
-          }
-          const int sx1 = std::min(sx + 1, wm1);
-          const T* a = s.row(std::min(sy, h - 1));
-          const T* b = s.row(std::min(sy + 1, h - 1));
-          const int top = (a[sx] * (256 - fx) + a[sx1] * fx + 128) / 256;
-          const int bot = (b[sx] * (256 - fx) + b[sx1] * fx + 128) / 256;
-          o[x] = T((top * (256 - fy) + bot * fy + 128) / 256);
-        }
-      }
-    }
-  }
-};
-
-}  // namespace
-
-template <typename T>
-void Engine::runOriginal(const FrameView& srcf, const FrameOut& outf) const {
-  const Params& p = p_;
-  const int np = fmt_.planes;
-  const Ops<T> ops{k_->get<T>(), fmt_.bits};
-  const Orig<T> og{fmt_.bits, pixelMax<T>(fmt_.bits)};
-  CPlane<T> src[3];
-  Plane<T> dst[3];
-  for (int i = 0; i < np; i++) {
-    src[i] = view<T>(srcf, i, fmt_.planeWidth(i), fmt_.planeHeight(i));
-    dst[i] = view<T>(outf, i, fmt_.planeWidth(i), fmt_.planeHeight(i));
-    copyPlane(src[i], dst[i]);
-  }
-  const int passes = p.origBlur * (p.origBm == 2 ? 1 : 3);
-  const int cpasses = (p.origBlur / 2) * (p.origBm == 2 ? 1 : 3);
-  const int depth = std::min(p.origDepth, 32767);
-
-  Buffer<T> mask(fmt_.width, fmt_.height), tmp(fmt_.width, fmt_.height);
-  ops.mask(src[0], mask.plane, p.thresh, 1);
-  og.blur(mask.plane, tmp.plane, p.origBm, passes);
-  if (p.origShow) {
-    copyPlane(CPlane<T>(mask.plane), dst[0]);
-    return;
-  }
-  og.warp(src[0], mask.plane, dst[0], depth, depth);
-  if (np == 1 || p.chroma == kChromaCopy) return;
-
-  // Chroma displacement in chroma samples: the luma depth divided by the subsampling (depth / 2 in YV12).
-  const int depthH = std::min(p.origDepth >> fmt_.ssw, 32767), depthV = std::min(p.origDepth >> fmt_.ssh, 32767);
-  Buffer<T> mc(dst[1].w, dst[1].h);
-  Plane<T> t = tmp.plane;
-  t.w = dst[1].w;
-  t.h = dst[1].h;
-  if (p.chroma == kChromaGuide) {
-    ops.guide(mask.plane, mc.plane, fmt_.ssw, fmt_.ssh, false);
-    for (int i = 1; i < np; i++) og.warp(src[i], mc.plane, dst[i], depthH, depthV);
-  } else {
-    for (int i = 1; i < np; i++) {
-      ops.mask(src[i], mc.plane, p.thresh, 1);
-      og.blur(mc.plane, t, p.origBm, cpasses);
-      og.warp(src[i], mc.plane, dst[i], depthH, depthV);
     }
   }
 }

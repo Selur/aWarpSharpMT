@@ -175,13 +175,13 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI
   const char* const args[] = {
       "clip:vnode;thresh:int:opt;blur:int:opt;type:int:opt;depth:int:opt;chroma:int:opt;depthC:int:opt;"
       "cplace:data:opt;blurV:int:opt;depthV:int:opt;depthVC:int:opt;blurC:int:opt;blurVC:int:opt;threshC:int:opt;"
-      "mask:int:opt;" AWARP_COMMON,
+      "mask:int:opt;wmode:int:opt;" AWARP_COMMON,
       "clip:vnode;depth:float:opt;blurlevel:int:opt;thresh:float:opt;cm:int:opt;bm:int:opt;show:int:opt;"
       "original:int:opt;" AWARP_COMMON,
       "clip:vnode;thresh:int:opt;chroma:int:opt;threshC:int:opt;mask:int:opt;" AWARP_COMMON,
       "clip:vnode;blur:int:opt;type:int:opt;chroma:int:opt;blurV:int:opt;blurC:int:opt;blurVC:int:opt;" AWARP_COMMON,
       "clip:vnode;edges:vnode;depth:int:opt;chroma:int:opt;depthC:int:opt;cplace:data:opt;depthV:int:opt;"
-      "depthVC:int:opt;" AWARP_COMMON,
+      "depthVC:int:opt;wmode:int:opt;" AWARP_COMMON,
       "clip:vnode;edges:vnode;depth:int:opt;chroma:int:opt;depthC:int:opt;cplace:data:opt;depthV:int:opt;"
       "depthVC:int:opt;" AWARP_COMMON,
   };

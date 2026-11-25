@@ -39,8 +39,11 @@ inline bool isMpeg2(const std::string& s) {
   return true;
 }
 
-// Blur passes by type: radius 6, radius 2, HQ blur (6 = the original's blurlevel 2 x 3).
-inline int defaultBlur(int type) { return type == 0 ? 2 : (type == 1 ? 3 : 6); }
+// Blur passes by type: radius 6, radius 2, and the original's HQ, fast 3-pass and fast 1-pass blur at blurlevel 2.
+inline int defaultBlur(int type) {
+  static const int passes[5] = {2, 3, 6, 6, 2};
+  return type >= 0 && type <= 4 ? passes[type] : 2;
+}
 
 // full_chroma: 4:4:4 or Y (depthC defaults to depth there, else to depth / 2).
 inline Params buildParams(int fn, const Args& a, bool full_chroma) {
@@ -63,6 +66,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
       p.blurVC = a.i("blurVC", p.blurC);
       p.threshC = a.i("threshC", p.thresh);
       p.mask = a.i("mask", 0);
+      p.wmode = a.i("wmode", 0);
       break;
     case kWarpSharp: {
       p.kind = Kind::WarpSharp;
@@ -78,26 +82,36 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
         else if (cm < 0 || cm > 2) e = "cm must be 0..2";
         if (e) throw std::runtime_error(std::string("aWarpSharp(original=true): ") + e);
       }
+      p.thresh = int(t * 256.0);
+      p.threshC = p.thresh;
+      if (original) {
+        // aWarpSharp2 with the original's mask, blur and warp; the warp takes origDepth (finer than depth) directly.
+        static const int types[3] = {2, 3, 4}, chromas[3] = {2, 4, 3};
+        const int k = bm == 2 ? 1 : 3;  // bm 0 and 1 run three passes per blur level
+        p.thresh = p.threshC = p.thresh & 255;  // beta 1 passes the threshold as a byte
+        p.mask = 1;
+        p.wmode = 1;
+        p.type = types[bm];
+        p.blur = p.blurV = blurlevel * k;
+        p.blurC = p.blurVC = (blurlevel / 2) * k;
+        p.chroma = chromas[cm];
+        p.original = true;
+        p.origDepth = int(d * blurlevel * 128.0);
+        p.depth = p.depthV = p.depthC = p.depthVC = 0;  // unused: origDepth
+        p.origShow = a.b("show", false);
+        break;
+      }
       static const int map[4] = {1, 4, 3, 2};
       p.type = bm != 2 ? 1 : 0;
-      p.thresh = int(t * 256.0);
-      if (original) p.thresh &= 255;  // beta 1 passes the threshold as a byte
-      p.blur = original ? blurlevel : (p.type == 1 ? blurlevel * 3 : blurlevel);
+      p.blur = p.type == 1 ? blurlevel * 3 : blurlevel;
       p.depth = int(d * blurlevel * 0.5);
-      if (original && p.depth > 127) p.depth = 127;
       p.depthC = dc(p.depth);
       p.blurV = p.blur;
       p.depthV = p.depth;
       p.depthVC = p.depthC;
       p.blurC = (p.blur + 1) >> 1;
       p.blurVC = p.blurC;
-      p.threshC = p.thresh;
-      p.chroma = (original && cm == 0) ? 2 : (cm >= 0 && cm < 4 ? map[cm] : -1);
-      p.original = original;
-      p.origDepth = original ? int(d * blurlevel * 128.0) : 0;
-      p.origBlur = blurlevel;
-      p.origBm = bm;
-      p.origShow = a.b("show", false);
+      p.chroma = cm >= 0 && cm < 4 ? map[cm] : -1;
       break;
     }
     case kSobel:
@@ -124,6 +138,7 @@ inline Params buildParams(int fn, const Args& a, bool full_chroma) {
       p.mpeg2 = isMpeg2(a.s("cplace"));
       p.depthV = a.i("depthV", p.depth);
       p.depthVC = a.i("depthVC", p.depthC);
+      if (fn == kWarp) p.wmode = a.i("wmode", 0);
       break;
   }
   p.opt = a.i("opt", -1);

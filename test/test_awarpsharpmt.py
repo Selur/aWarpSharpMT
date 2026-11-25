@@ -72,6 +72,11 @@ def cases(m, clip):
         ("aWarpSharp2 m1 t2", lambda o: m.aWarpSharp2(clip, mask=1, type=2, depth=24, opt=o)),
         ("aWarpSharp2 t2", lambda o: m.aWarpSharp2(clip, type=2, chroma=3, depth=20, opt=o)),
         ("aWarpSharp2 t2 c4", lambda o: m.aWarpSharp2(clip, type=2, blur=4, opt=o)),
+        ("aBlur t3", lambda o: m.aBlur(clip, type=3, chroma=3, opt=o)),
+        ("aBlur t4", lambda o: m.aBlur(clip, type=4, blur=3, chroma=3, opt=o)),
+        ("aWarpSharp2 w1", lambda o: m.aWarpSharp2(clip, mask=1, type=4, wmode=1, chroma=3, depth=20, opt=o)),
+        ("aWarpSharp2 w1 neg", lambda o: m.aWarpSharp2(clip, type=3, wmode=1, depth=-12, depthV=30, opt=o)),
+        ("aWarp w1", lambda o: m.aWarp(clip, edges, depth=20, chroma=4, wmode=1, opt=o)),
         ("aWarpSharp", lambda o: m.aWarpSharp(clip, original=False, opt=o)),
         ("original", lambda o: m.aWarpSharp(clip, original=True, opt=o)),
         ("original bm0 cm2", lambda o: m.aWarpSharp(clip, original=True, bm=0, cm=2, depth=40, blurlevel=3, opt=o)),
@@ -93,6 +98,19 @@ def large_cases(m, clip):
         ("aBlur t1 v", lambda o: m.aBlur(big, type=1, blur=2, blurV=11, chroma=3, opt=o)),
         ("aBlur t2", lambda o: m.aBlur(big, type=2, blur=3, chroma=3, opt=o)),
     ]
+
+
+def original_as_awarpsharp2(clip, depth, blurlevel, thresh, cm, bm):
+    """aWarpSharp2 arguments that give aWarpSharp(original=true, ...); None if a depth is not a whole number."""
+    ssw = clip.format.subsampling_w if clip.format.num_planes > 1 else 0
+    ssh = clip.format.subsampling_h if clip.format.num_planes > 1 else 0
+    od = int(depth * blurlevel * 128)  # the original's depth unit; aWarpSharp2 wmode=1 depth 1 = 256 of them
+    if od % 256 or (od >> ssw) % 256 or (od >> ssh) % 256:
+        return None
+    k = 1 if bm == 2 else 3  # bm 0 and 1 run three passes per blur level
+    return dict(thresh=int(thresh * 256) & 255, mask=1, type=(2, 3, 4)[bm], blur=blurlevel * k,
+                blurC=(blurlevel // 2) * k, depth=od // 256, depthV=od // 256, depthC=(od >> ssw) // 256,
+                depthVC=(od >> ssh) // 256, chroma=(2, 4, 3)[cm], wmode=1)
 
 
 def digest(clip):
@@ -296,6 +314,46 @@ DIGESTS = {
     ("GRAYS", "aSobel m1"): "1e9622415b378a053f098f877e976095",
     ("GRAYS", "aWarpSharp2 m1"): "09802d81133ca63791450b59170f413e",
     ("GRAYS", "aWarpSharp2 m1 t2"): "d2e02ae4305728da71b0dc55abec3b92",
+    ("GRAY8", "aBlur t3"): "56662320293e56c2abbaeb88535b7f69",
+    ("GRAY8", "aBlur t4"): "689da6e271e4e1a904fe78f403b54a89",
+    ("GRAY8", "aWarpSharp2 w1"): "5279b7d290bd67aec08de7b614833c53",
+    ("GRAY8", "aWarpSharp2 w1 neg"): "6e8ffedf9c4d173f657bdfc801918328",
+    ("GRAY8", "aWarp w1"): "0283e439a9a3a203a838b6ee2fe7f2fb",
+    ("YUV420P8", "aBlur t3"): "7ea026e7d198224e8908879689a26a42",
+    ("YUV420P8", "aBlur t4"): "bdaffdbc1ca3d9d1c04c503a33e00cc0",
+    ("YUV420P8", "aWarpSharp2 w1"): "80af1fc8c5e9b1792b0c78059278470b",
+    ("YUV420P8", "aWarpSharp2 w1 neg"): "6fed1b0cf5fa8cba77c80df0b1c0ed31",
+    ("YUV420P8", "aWarp w1"): "8d61094ef8a851f38149c4b76bd7c0cb",
+    ("YUV422P10", "aBlur t3"): "df10c3cb8629055dbe2ee71421f596de",
+    ("YUV422P10", "aBlur t4"): "e08f91dddd2af0422d1c4f4dd40695fc",
+    ("YUV422P10", "aWarpSharp2 w1"): "7bd2beaa97e246150eae131a932de0ca",
+    ("YUV422P10", "aWarpSharp2 w1 neg"): "076d441f0135fe53db168ea9aa7a31ea",
+    ("YUV422P10", "aWarp w1"): "f72f40d7ec2caf048df0a3113a4d1805",
+    ("YUV444P16", "aBlur t3"): "1026efcc48835719ab736f3a298a0e07",
+    ("YUV444P16", "aBlur t4"): "9acfa6c62bda937752482709a516b983",
+    ("YUV444P16", "aWarpSharp2 w1"): "e89d156b8d42d5ef2f7300a2c8166f63",
+    ("YUV444P16", "aWarpSharp2 w1 neg"): "a84595c03073838cf5524d53bfa6c38b",
+    ("YUV444P16", "aWarp w1"): "78fec85f62e89d64a7835a53c9976ed0",
+    ("YUV411P8", "aBlur t3"): "89afa0d1743b433366421c0bf54235b2",
+    ("YUV411P8", "aBlur t4"): "c10fbbfc707757dd8860c6f6b99b1ddb",
+    ("YUV411P8", "aWarpSharp2 w1"): "44bec755dae7823f247dc9ac43586d3a",
+    ("YUV411P8", "aWarpSharp2 w1 neg"): "d00ae3feba6192726cdba086d76db4ba",
+    ("YUV411P8", "aWarp w1"): "c3f543ddcfca4ea86709d3576efdabaa",
+    ("YUV440P8", "aBlur t3"): "5b66ef6cbc366826a09014138731c092",
+    ("YUV440P8", "aBlur t4"): "340f4f7b57accc44d8d78bcc59d7933b",
+    ("YUV440P8", "aWarpSharp2 w1"): "44f902e7b41df7aa8c2e5b152fb2a177",
+    ("YUV440P8", "aWarpSharp2 w1 neg"): "eaf266f2133d76888c0272f6c57d56b7",
+    ("YUV440P8", "aWarp w1"): "ff09a691d0eda935f6af1ae241325569",
+    ("YUV420PS", "aBlur t3"): "4f76bbd53bf1c1c624cb1a270f3ed9bc",
+    ("YUV420PS", "aBlur t4"): "0f274fb02021a8690c0c0904354953c9",
+    ("YUV420PS", "aWarpSharp2 w1"): "d708ed91930ecf030eac9d76cea14dc6",
+    ("YUV420PS", "aWarpSharp2 w1 neg"): "5e43cd0a3b231708e869164e34886d86",
+    ("YUV420PS", "aWarp w1"): "ac74b2a116a78e9bda379b322f2e98d6",
+    ("GRAYS", "aBlur t3"): "1589d4d7c22bb565bc2cb358082e8d3a",
+    ("GRAYS", "aBlur t4"): "336d9e516a3f875adc97714288ad7d9b",
+    ("GRAYS", "aWarpSharp2 w1"): "35b6f60b5f8a1895711e8458708d898d",
+    ("GRAYS", "aWarpSharp2 w1 neg"): "aea8254c4dbe9b7709c032358ab7973e",
+    ("GRAYS", "aWarp w1"): "cd9497a172cf9c62e95efd34c84d8043",
 }
 
 
@@ -346,13 +404,30 @@ def main():
             failures += not same
             print("%-4s %-14s %s" % ("ok" if same else "FAIL", fmt, "original mask, thresh %.2f blurlevel %d" % (t, level)))
 
+    # aWarpSharp(original=true) is aWarpSharp2 with mask=1, the original's blur (type 2..4) and wmode=1
+    for fmt in FORMATS:
+        clip = source(fmt)
+        for depth, level, t, cm, bm in ((16.0, 2, 0.5, 1, 2), (8.0, 4, 0.3, 2, 1), (24.0, 3, 0.75, 0, 0),
+                                        (16.0, 1, 1.0, 1, 0), (32.0, 2, 0.5, 2, 2)):
+            a = original_as_awarpsharp2(clip, depth, level, t, cm, bm)
+            label = "original=true as aWarpSharp2, depth %g blurlevel %d cm %d bm %d" % (depth, level, cm, bm)
+            if a is None:
+                print("skip %-14s %s (depth not a whole number)" % (fmt, label))
+                continue
+            orig = m.aWarpSharp(clip, depth=depth, blurlevel=level, thresh=t, cm=cm, bm=bm, original=True)
+            same = digest(m.aWarpSharp2(clip, **a)) == digest(orig)
+            failures += not same
+            print("%-4s %-14s %s" % ("ok" if same else "FAIL", fmt, label))
+
     # argument checks
     c8 = core.std.BlankClip(format=vs.YUV420P8)
     bad = [
         lambda: m.aWarpSharp2(c8, thresh=256),
         lambda: m.aWarpSharp2(c8, depth=128),
         lambda: m.aWarpSharp2(c8, chroma=7),
-        lambda: m.aWarpSharp2(c8, type=3),
+        lambda: m.aWarpSharp2(c8, type=5),
+        lambda: m.aWarpSharp2(c8, type=3, blurV=2),
+        lambda: m.aWarpSharp2(c8, wmode=2),
         lambda: m.aSobel(c8, mask=2),
         lambda: m.aWarpSharp2(c8, mask=-1),
         lambda: m.aBlur(c8, type=2, blurV=2),

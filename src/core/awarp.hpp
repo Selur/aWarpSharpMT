@@ -28,18 +28,17 @@ struct Params {
   int thresh = 128, threshC = 128;   // 0..255 (8-bit scale)
   int blur = 2, blurV = 2;           // passes
   int blurC = 1, blurVC = 1;
-  int type = 0;                      // 0: radius 6 blur, 1: radius 2 blur, 2: HQ blur of the original
+  int type = 0;                      // 0 radius 6, 1 radius 2; the original's blurs: 2 HQ, 3 fast 3-pass, 4 fast 1-pass
   int depth = 16, depthV = 16;       // -128..127
   int depthC = 8, depthVC = 8;
   int chroma = 4;
   bool mpeg2 = false;                // cplace "MPEG2"
   int mask = 0;                      // edge mask: 0 aWarpSharp2, 1 MarcFD's original
-  // aWarpSharp(original=true): MarcFD's aWarpSharp.
+  int wmode = 0;                     // warp: 0 aWarpSharp2, 1 MarcFD's original (aWarp, aWarpSharp2)
+  // aWarpSharp(original=true): aWarpSharp2 with mask=1, type 2..4 and wmode=1 (params.hpp), plus these two.
   bool original = false;
-  int origDepth = 0;                 // depth * blurlevel * 128
-  int origBlur = 2;                  // blurlevel
-  int origBm = 2;                    // 0 HQ, 1 fast 3-pass, 2 fast 1-pass
-  bool origShow = false;
+  int origDepth = 0;                 // warp depth in the original's units: depth * blurlevel * 128
+  bool origShow = false;             // return the blurred mask in the luma plane
   int opt = -1;
 };
 
@@ -75,8 +74,6 @@ class Engine {
  private:
   template <typename T>
   void run(const FrameView& src, const FrameView& edge, const FrameOut& out) const;
-  template <typename T>
-  void runOriginal(const FrameView& src, const FrameOut& out) const;
 
   Params p_;
   Format fmt_;
